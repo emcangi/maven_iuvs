@@ -103,6 +103,9 @@ def setup_user_paths():
     
     idl_pipeline_dir = input("Where would you like to put the IDL pipeline"
                              " directory? (Required for echelle; location of LSF file.)")
+    
+    pds_deliveries_dir = input("Where would you like to put the PDS deliveries"
+                             " directory?")
 
     # determine whether to load SPICE kernels automatically on startup
     while True:
@@ -133,6 +136,7 @@ def setup_user_paths():
     user_paths_file.write("iuvs_vm_username = \""+vm_username+"\"\n")
     user_paths_file.write("auto_spice_load = "+auto_spice_load+"\n")
     user_paths_file.write("idl_pipeline_dir = \""+idl_pipeline_dir+"\"\n")
+    user_paths_file.write("pds_deliveries_dir = \""+pds_deliveries_dir+"\"\n")
     user_paths_file.close()
 
     # now scripts can import the relevant directories from user_paths
@@ -142,6 +146,8 @@ def get_default_data_directory(level='l1b'):
     """
     Returns default l1b_dir defined in user_paths.py, creating the
     file if needed.
+
+    TODO: Replace 'level' with something more general. 
 
     Parameters
     ----------
@@ -156,17 +162,25 @@ def get_default_data_directory(level='l1b'):
     # TODO: separate l1b_setup logic from spice setup logic
     setup_user_paths()
 
-    # get the path from the possibly newly created file
-    from maven_iuvs.user_paths import l1b_dir, l1a_dir, l1a_full_mission_reprocess_dir  # don't move this
+    # get the path from the possibly newly created file: don't move this
+    from maven_iuvs.user_paths import l1b_dir, l1a_dir, \
+        l1a_full_mission_reprocess_dir, idl_pipeline_dir, pds_deliveries_dir
 
+    # TODO: replace this witha dictionary
     if level == 'l1b':
         local_dir = l1b_dir
     elif level == 'l1a':
         local_dir = l1a_dir
     elif level == 'l1a_full_mission_reprocess':
         local_dir = l1a_full_mission_reprocess_dir
+    elif level == 'idl_pipeline_dir':
+        local_dir = idl_pipeline_dir
+    elif level == 'pds_deliveries_dir':
+        local_dir = pds_deliveries_dir
     else:
-        raise ValueError("level must be 'l1a' or 'l1b'")
+        raise ValueError("Allowed values: 'l1a', 'l1b', " \
+                         "'l1a_full_mission_reprocess', 'idl_pipeline_dir', " \
+                         "'pds_deliveries_dir' ")
 
     if not os.path.exists(local_dir):
         raise Exception("Cannot find specified directory: "
