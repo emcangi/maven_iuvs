@@ -1,5 +1,6 @@
 import datetime
 import pytz
+import tempfile
 import numpy as np
 import scipy as sp
 from astropy.io import fits
@@ -1550,6 +1551,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                        save_arrays=False, place_for_arrays=None, 
                        return_each_line_fit=True, 
                        do_BU_background_comparison=False, 
+                       timing_log=None,
                        run_writeout=True, overwrite=False, make_plots=True, 
                        idl_process_kwargs = {"open_idl": False, "proc": None, 
                                              "stderr_queue": None, 
@@ -1624,27 +1626,38 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     if os.path.isfile(new_filepath) and (run_writeout==True) and (overwrite==False):
         print(f"Looking to see if {new_filepath} exists")
         print("file already exists, skipping write out")
-        return 
+        return "OK"
         
     # Set number of integration frames to fit 
     # ===============================================================================================
     ints_to_fit = {"first": 1}.get(ints_to_fit, get_n_int(light_fits))
 
+    if timing_log is not None:
+        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Start (t0)\n")
+    t0 = time.time()
     # Dark subtraction
     # =========================================================================
     dark_sub_data, _, i_bad = subtract_darks(light_fits, dark_fits)
     i_nanlights, i_badlights, i_lights_with_nandark, i_nandark = i_bad  # unpack indices of problematic frames
     i_badframes = list(set(i_nanlights + i_badlights + i_lights_with_nandark))
 
+    t1 = time.time()
+    if timing_log is not None:
+        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Dark subtraction: {round(t1-t0, 2)} seconds (t1) \n")
     # Artifact removal / outlier rejection
     # =========================================================================
+
     if remove_artifacts:
         processed_data = clean_data(dark_sub_data, i_badlights, **clean_data_kwargs)
     else:
         processed_data = dark_sub_data
+    t2 = time.time()
+    if timing_log is not None:
+        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Artifact removal: {round(t2-t1, 2)} seconds (t2) \n")
 
     # Flatten the calibrated data (coadd in spatial dimension)
     # ===============================================================================================
+
     spectrum, data_unc = flatten(light_fits, processed_data)
     # For some reason, data uncertainties are still nonzero even if the frame 
     # is broken, so turn them off here so they don't plot.. 
@@ -1697,6 +1710,10 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     arrays_in_kR_pernm, fit_params_kR, fit_unc_kR = convert_to_physical_units(light_fits, arrays_in_DN, fit_params, fit_uncertainties)
 
+    t3 = time.time()
+    if timing_log is not None:
+        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished flattening and fitting: {round(t3-t2, 2)} seconds (t3) \n")
+
     if save_arrays:
         header = ["Wavelengths (nm)", "Data", "Data unc", "Total model", "Background"]
 
@@ -1730,22 +1747,28 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     # Write out the l1c file
     # ===============================================================================================
+
     # Unpack for clarity
     if return_each_line_fit:
         spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bgs_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, IPH_fit_kR_pernm = arrays_in_kR_pernm
     else: 
         spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bgs_kR_pernm = arrays_in_kR_pernm
 
-
     if run_writeout:
         assert process_timestamp is not None
-        writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
-                     fit_params_kR, fit_unc_kR, 
-                     I_fit_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, 
-                     IPH_fit_kR_pernm, bgs_kR_pernm,
-                     bright_data_ph_per_s, process_timestamp,  **idl_process_kwargs)
+        IDL_status = writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
+                                  fit_params_kR, fit_unc_kR, 
+                                  I_fit_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, 
+                                  IPH_fit_kR_pernm, bgs_kR_pernm, 
+                                  spec_kR_pernm, data_unc_kR_pernm,
+                                  bright_data_ph_per_s, process_timestamp, 
+                                  timing_log=timing_log, **idl_process_kwargs)
+        t4 = time.time()
+        if timing_log is not None:
+            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished writeout with IDL: {round(t4-t3, 2)} seconds (t4)\n")
+        return IDL_status
 
-    return
+    return None
 
 
 def clean_data(data, all_bad_lights, clean_method="new", remove_rays=True, remove_hotpix=True):
@@ -2083,8 +2106,10 @@ def make_array_of_fitted_backgrounds(light_fits, fit_params):
 
 def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
                  fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
-                 bright_data_ph_per_s_array, process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
-                 open_idl=True, proc=None, stderr_queue=None, stderr_thread=None):
+                 spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
+                 process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
+                 timing_log=None, open_idl=True, proc=None, 
+                 stderr_queue=None, stderr_thread=None):
     """
     Writes out result of model fitting to an l1c file via a call to IDL.
 
@@ -2146,17 +2171,6 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     H_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_H'] for i in range(n_int)]
     IPH_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_IPH'] for i in range(n_int)]
 
-    linectr_fit_dict = {
-        # NEW - central wavelengths - shape: (n_int,)
-        "H_LYA_CENTER": H_lya_ctr,
-        "D_LYA_CENTER": [i - D_offset for i in H_lya_ctr],
-        "IPH_LYA_CENTER": IPH_lya_ctr,
-        # Uncertainties on centers - shape: (n_int,)
-        "H_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, 
-        "D_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, # Same as H bc it's a const
-        "IPH_LYA_CENTER_OneSIGMA": IPH_lya_ctr_1sig,
-    }
-
     product_creation_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y/%j %b %d %H:%M:%S.%fUTC')
     seg = iuvs_segment_from_fname(light_fits["Primary"].header['Filename'])
     # in IDL the microseconds are only 5 digits long and 0, so idk.
@@ -2176,55 +2190,77 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
         "UTC": light_fits["Integration"].data["UTC"],
         "PRODUCT_CREATION_DATE": [product_creation_date for i in range(len(H_brightnesses))],
         "ORBIT_SEGMENT": [seg for i in range(len(H_brightnesses))],
+        # This stuff will go into the line center 
+        # central wavelengths - shape: (n_int,)
+        "H_LYA_CENTER": H_lya_ctr,
+        "D_LYA_CENTER": [i - D_offset for i in H_lya_ctr],
+        "IPH_LYA_CENTER": IPH_lya_ctr,
+        # Uncertainties on centers - shape: (n_int,)
+        "H_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, 
+        "D_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, # Same as H bc it's a const
+        "IPH_LYA_CENTER_OneSIGMA": IPH_lya_ctr_1sig,
     }
 
     # handle easy stuff
-    brightness_writeout = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in brightness_HDU_dict.items() ]) )
-    linectr_writeout = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in linectr_fit_dict.items() ]) )
+    brightness_and_linectr_df = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in brightness_HDU_dict.items() ]) )
 
     # The following is the spectrum with the background subtracted as stated. It needs its own file because we need to write out 
     # 10 different arrays. The IDL pipeline only writes out the last integration's spectrum 10 times, for some reason. 
     # This error has been corrected in this version. 
-    bright_data_ph_per_s = pd.DataFrame(data=bright_data_ph_per_s_array.transpose(),    # values
+    bright_data_ph_per_s_df = pd.DataFrame(data=bright_data_ph_per_s_array.transpose(),    # values
                                         columns=[f"i={j}" for j in range(n_int)])  # 1st row as the column names
     
-    # Save the model fit arrays
-    I_fit_df = pd.DataFrame(data=I_fit.transpose(),
-                            columns=[f"i={j}" for j in range(n_int)])
-    H_fit_df = pd.DataFrame(data=H_fit.transpose(),
-                            columns=[f"i={j}" for j in range(n_int)])
-    D_fit_df = pd.DataFrame(data=D_fit.transpose(),
-                            columns=[f"i={j}" for j in range(n_int)])
-    IPH_fit_df = pd.DataFrame(data=IPH_fit.transpose(),
-                            columns=[f"i={j}" for j in range(n_int)])
-    bg_df = pd.DataFrame(data=bg_fit.transpose(),
-                            columns=[f"i={j}" for j in range(n_int)])
-    
+    # Transpose arrays
+    I_t = I_fit.transpose()
+    H_t = H_fit.transpose()
+    D_t = D_fit.transpose()
+    IPH_t = IPH_fit.transpose()
+    bg_t = bg_fit.transpose()
+    spec_t = spec_kR_pernm.transpose()
+    data_unc_t = data_unc_kR_pernm.transpose()
+
+    # Interleave the arrays, creating one big array with format:
+    # I_0, H_0, D_0, IPH_0, bg_0, spec_0, data_unc_0, I_1, ... data_unc_1, I_2...data_unc_n
+    # Where the subscript is the integratio number, up to n, and each 
+    # item is a vector (rows = wavelengths)
+    interleaved = np.stack((I_t, H_t, D_t, IPH_t, bg_t, spec_t, data_unc_t), 
+                           axis=2).reshape(I_t.shape[0], -1)
+
+    # Make dataframe
+    fits_n_spec_df = pd.DataFrame(data=interleaved,
+                                  columns=[f"{lbl}, i={j}" for j in range(n_int) 
+                                           for lbl in ["total_model", "H_fit", 
+                                                        "D_fit", "IPH_fit", 
+                                                        "background", 
+                                                        "coadded_spectrum", 
+                                                        "unc_spectrum"]
+                                          ]
+                                 )
     
     # Save the output to some temporary files that will be saved outside the Python module.
     # TODO: Make these actual temp files.
-    brightness_csv_path = idl_pipeline_folder + "transfer_to_IDL/brightness.csv"
-    ph_per_s_csv_path = idl_pipeline_folder + "transfer_to_IDL/ph_per_s.csv"
-    total_model_csv_path =  idl_pipeline_folder + "transfer_to_IDL/total_model.csv"
-    H_csv_path =  idl_pipeline_folder + "transfer_to_IDL/H_fit.csv"
-    D_csv_path =  idl_pipeline_folder + "transfer_to_IDL/D_fit.csv"
-    IPH_csv_path =  idl_pipeline_folder + "transfer_to_IDL/IPH_fit.csv"
-    bg_csv_path =  idl_pipeline_folder + "transfer_to_IDL/background.csv"
-    linectr_csv_path = idl_pipeline_folder + "transfer_to_IDL/linectr.csv"
-
+    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
+    all_fits_csv_path = all_fits_csv_tf.name
+    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
+    brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
+    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
+    ph_per_s_csv_path = ph_per_s_csv_tf.name
+    
+    # Have to make a different value for NaN for IDL
     narep = -9999
-    brightness_writeout.to_csv(brightness_csv_path, index=False, na_rep=narep)
-    bright_data_ph_per_s.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
-    linectr_writeout.to_csv(linectr_csv_path, index=False, na_rep=narep)
-    I_fit_df.to_csv(total_model_csv_path, index=False, na_rep=narep)
-    H_fit_df.to_csv(H_csv_path, index=False, na_rep=narep)
-    D_fit_df.to_csv(D_csv_path, index=False, na_rep=narep)
-    IPH_fit_df.to_csv(IPH_csv_path, index=False, na_rep=narep)
-    bg_df.to_csv(bg_csv_path, index=False, na_rep=narep)
+    brightness_and_linectr_df.to_csv(brightness_and_linectr_csv_path, index=False, na_rep=narep)
+    bright_data_ph_per_s_df.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
+    fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
 
     # Now call IDL
     if open_idl is True:
+        ta = time.time()
+        if timing_log is not None:
+            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening IDL\n")
         proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
+        tb = time.time()
+        if timing_log is not None:
+            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished opening IDL and compiling script: {round(tb-ta, 2)} sec (tb-ta)\n")
     else:
         if (proc is None) or (stderr_queue is None) or (stderr_thread is None):
             raise Exception("Please pass in the subprocess proc, stderr_queue, "
@@ -2232,7 +2268,7 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
         proc = proc
         stderr_queue = stderr_queue
         stderr_thread = stderr_thread
-
+    tc = time.time()
     output_log = l1c_savepath + "IDLoutput.txt"
     stdout_queue = queue.Queue()
     stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
@@ -2241,7 +2277,9 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                                                           daemon=True)
     stdout_thread.start()
     proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                     '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}'\n")
+                     '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                     '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                     '{ph_per_s_csv_path}'\n")
     # The rest of the arguments are provided as default keywords cause the same 
     # files get used over and over again to store the stuff transmitted to IDL
     proc.stdin.flush()
@@ -2249,13 +2287,18 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     file_process_success = "FINISHED! If you see this message in the IDL log or terminal when calling from Python, the IDL script succeeded"
     if check_for_success_msg(stdout_queue, file_process_success):
         print(f"File and label writeout succeeded")
+        returnval = "IDL OK"
     else:
         print(f"Python detects that an error occurred in IDL")
+        returnval = "IDL error"
 
+    td = time.time()
+    if timing_log is not None:
+        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished with IDL writeout: {round(td-tc, 2)} sec (td-tc)\n")
     if open_idl is True:
         proc.terminate() 
 
-    return 
+    return returnval
 
 
 def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt"):
@@ -2363,7 +2406,7 @@ def check_for_success_msg(output_queue, target_phrase, timeout=30):
 
         # Break if time exceeded
         if time.time() - start_time > timeout:
-            print("⏰ Timeout waiting for phrase.")
+            print("Timeout waiting for phrase.")
             return False
 
         # If buffer is not empty and last line matches
