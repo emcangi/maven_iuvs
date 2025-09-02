@@ -597,7 +597,7 @@ def make_light_and_dark_pair_CSV(ech_l1a_idx, dark_index, l1a_dir,
 
     # Pair lights and darks
     print("Finding darks for the lights")
-    lights_and_darks, files_missing_dark = pair_lights_and_darks(selected_l1a, dark_index, verbose=False)
+    lights_and_darks = pair_lights_and_darks(selected_l1a, dark_index, verbose=False)
 
     # Convert the dictionary into just a list of filename pairs
     LD_fns = {}
@@ -613,7 +613,8 @@ def make_light_and_dark_pair_CSV(ech_l1a_idx, dark_index, l1a_dir,
     # Add in the folder columns
     lf_list = [relative_path_from_fname(L, v=version)
                for L in newfiles_df["Light"]]
-    df_list = [relative_path_from_fname(D, v=version)
+    df_list = [D if D=="No valid dark found" 
+               else relative_path_from_fname(D, v=version)
                for D in newfiles_df["Dark"]]
     newfiles_df["Light Folder"] = lf_list
     newfiles_df["Dark Folder"] = df_list
@@ -628,14 +629,8 @@ def make_light_and_dark_pair_CSV(ech_l1a_idx, dark_index, l1a_dir,
 
     print("Writing out light/dark pair file")
     complete_df_sorted.to_csv(csv_path, index=False)
-
-    if files_missing_dark:
-        print(f"Warning: {len(files_missing_dark)} files did not have a matching dark.")
-        filenames_no_dark = [f['name'] for f in files_missing_dark]
-        no_dark_df = pd.DataFrame({"Filename": filenames_no_dark})
-        no_dark_df.to_csv(csv_folder + "missing_dark.csv", index=False)
-
     print("Done!")
+    
     return
 
 
@@ -969,14 +964,13 @@ def pair_lights_and_darks(selected_l1a, dark_idx, verbose=False):
     """
     
     lights_and_darks = {}
-    lights_missing_darks = []
     
     for fidx in tqdm(selected_l1a):
         try:
             dark_opts = find_dark_options(fidx, dark_idx) 
             chosen_dark = choose_dark(fidx, dark_opts)
             if chosen_dark == None:
-                lights_missing_darks.append(fidx)#fidx["name"])  # if it's a light file missing a dark, we would like to know.
+                lights_and_darks[fidx['name']] = (fidx, {"name": "No valid dark found"})
             else:
                 lights_and_darks[fidx['name']] = (fidx, chosen_dark)
         except ValueError:
@@ -985,10 +979,9 @@ def pair_lights_and_darks(selected_l1a, dark_idx, verbose=False):
                     print(f"{fidx['name']} is dark, continuing")
                     print()
                 continue # of course there will be no darks for a dark
-
             continue 
             
-    return lights_and_darks, lights_missing_darks
+    return lights_and_darks
 
 
 def choose_dark(fidx, dark_options):

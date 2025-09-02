@@ -83,7 +83,7 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
     no_geometry = [i['name'] for i in find_files_missing_geometry(selected_l1a)]
 
     # TODO: fix bug if "verbose" flag is missing from call
-    lights_and_darks, files_missing_dark = pair_lights_and_darks(selected_l1a, dark_idx, verbose=kwargs["verbose"])
+    lights_and_darks = pair_lights_and_darks(selected_l1a, dark_idx, verbose=kwargs["verbose"])
 
     # Arrays to keep track of which files were processed, which were already done, and which had problems
     processed = []
