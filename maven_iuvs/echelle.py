@@ -740,13 +740,17 @@ def get_dark_path(light_l1a_path, idx, drkidx, return_sep=False):
     seg = iuvs_segment_from_fname(light_l1a_path)
     orbfolder = orbit_folder(orbitno)
 
-    # Trim down the index to just the light file we want to find a dark match for
-    datetimeobj = re.search(r"(?<=-ech_)[0-9]{8}[tT][0-9]{6}", light_l1a_path).group(0)
+    # Get datetime
+    datetimeobj = iuvs_filename_to_datetime(light_l1a_path.split('/')[-1])
 
-    selected_l1a = downselect_data(idx, light_dark="light",
+    # Control for fact that some files are lights, but marked darks
+    ld = "dark" if "echdark" in light_l1a_path.split('/')[-1] else "light"
+
+    # Trim down the index to just the light file we want to find a dark match for
+    selected_l1a = downselect_data(idx, light_dark=ld,
                                    orbit=orbitno,
                                    segment=seg,
-                                   date=datetime.datetime.fromisoformat(datetimeobj))
+                                   date=datetimeobj)
     light_idx = selected_l1a[0]
     dark_opts = find_dark_options(light_idx, drkidx)
     dark_idx = choose_dark(light_idx, dark_opts)
