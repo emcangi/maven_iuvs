@@ -30,7 +30,7 @@ from maven_iuvs.instrument import ech_LSF_unit, convert_spectrum_DN_to_photoeven
                                    ran_DN_uncertainty, ech_best_MRH_pixel
 from maven_iuvs.miscellaneous import get_n_int, locate_missing_frames, \
     iuvs_orbno_from_fname, iuvs_filename_to_datetime, iuvs_segment_from_fname, \
-    orbno_RE, fn_RE, orbit_folder, findDiff, \
+    orbno_RE, fn_RE, fn_no_version_RE, orbit_folder, findDiff, \
     relative_path_from_fname
 from maven_iuvs.geometry import has_geometry_pvec, get_mean_mrh
 from maven_iuvs.pds import get_pds_dates
@@ -336,6 +336,58 @@ def downselect_data(index, light_dark=None, orbit=None, date=None, segment=None,
     return selected
 
 # Relating to dark vs. light observations -----------------------------
+def get_dark_from_keyfile(light_filename, keydf):
+    """
+    Retrieve the dark associated with light_filename from keyfile csv.
+
+    Parameters
+    ----------
+    light_filename : string
+                     Filename of some light observation, no full path.
+    keydf : pandas dataframe or string
+            csv file or loaded dataframe containing pairs of lights and darks.
+    Returns
+    ----------
+    lf : string
+         Path to the folder where the originally requested light file lives.
+    light_filename : string
+         Originally requested light filename. Returned for symmetry
+    df : string
+         Path to the folder where the retrieved dark lives. 
+    dark_filename : string
+         Filename for the matched dark.
+    """
+    
+    if type(keydf)==str:
+        keydf = pd.read_csv(keydf)
+
+    # Check that versions match
+    version_mismatch = False
+    v_file = re.search(iuvs.miscellaneous.version_RE, light_filename).group(0)
+    v_key = re.search(iuvs.miscellaneous.version_RE, keydf.loc[0, 'Light']).group(0)
+    
+    if v_file != v_key:
+        version_mismatch = True
+        warnings.warn("Version mismatch between key and filename. Will attempt"
+                      "to translate key version to input file version, but "
+                      "this may cause errors if revision info is out of date.")
+        vless = re.search(fn_no_version_RE, light_filename).group(0)
+        row = keydf[keydf["Light"].str.contains(vless)]
+    else:
+        row = keydf.loc[keydf["Light"] == light_filename]
+
+    if len(row)==0:
+        return "Light missing", "Light missing", "Light missing", "Light missing"
+    else:
+        lf = row['Light Folder'].item()
+        df = row['Dark Folder'].item()
+        dark_filename = row['Dark'].item()
+
+        if version_mismatch:
+            dark_filename = dark_filename.replace(v_key, v_file)
+        
+        return lf, light_filename, df, dark_filename
+
 
 def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, 
                                        verbose=True):
