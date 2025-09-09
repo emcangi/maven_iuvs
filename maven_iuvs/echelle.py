@@ -1057,8 +1057,14 @@ def choose_dark(fidx, dark_options):
         return None
     elif len(dark_options) == 1:
         return dark_options[0]
-    else: 
-        return dark_options[0] # TODO: Make this more intelligent
+    else:
+        # Pick the one that's closest in time
+        lighttime = iuvs_filename_to_datetime(fidx['name'])
+    
+        dt = np.array([abs(lighttime - iuvs_filename_to_datetime(o['name'])) 
+                       for o in dark_options])
+        i_tmin = np.argmin(dt)
+        return dark_options[i_tmin]
 
 
 def find_dark_options(input_light_idx, idx_list_to_search):
