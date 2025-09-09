@@ -2335,12 +2335,15 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                      '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
                      '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
                      '{ph_per_s_csv_path}'\n")
-    # The rest of the arguments are provided as default keywords cause the same 
-    # files get used over and over again to store the stuff transmitted to IDL
+
     proc.stdin.flush()
+    time.sleep(1)
+    target = l1c_savepath + (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+    target_fits = Path(target)
+    target_xml = Path(target[:-16] + ".xml")
 
     file_process_success = "FINISHED! If you see this message in the IDL log or terminal when calling from Python, the IDL script succeeded"
-    if check_for_success_msg(stdout_queue, file_process_success):
+    if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success): #
         print(f"File and label writeout succeeded")
         returnval = "IDL OK"
     else:
@@ -2352,6 +2355,9 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
         timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished with IDL writeout: {round(td-tc, 2)} sec (td-tc)\n")
     if open_idl is True:
         proc.terminate() 
+
+    with stdout_queue.mutex:
+        stdout_queue.queue.clear()
 
     return returnval
 
