@@ -757,7 +757,7 @@ def get_dark_path(light_l1a_path, idx, drkidx, return_sep=False):
 
     if dark_idx is not None:
         if return_sep==True:
-            return [os.path.join(orig_file_path, orbfolder), f"{dark_idx['name']}"]
+            return [os.path.join(orig_file_path, orbfolder) + "/", f"{dark_idx['name']}"]
         else:
             return os.path.join(orig_file_path, orbfolder, dark_idx['name'])
     else:
