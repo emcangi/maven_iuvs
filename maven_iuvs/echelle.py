@@ -1681,11 +1681,12 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     """
     
     # Check if file is previous done
-    new_filepath = l1c_savepath + (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+    l1c_file = l1c_savepath + (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+    l1c_labelfile = l1c_file[:-16] + ".xml"
 
-    if os.path.isfile(new_filepath) and (run_writeout==True) and (overwrite==False):
-        print(f"Looking to see if {new_filepath} exists")
-        print("file already exists, skipping write out")
+    if os.path.isfile(l1c_file) and os.path.isfile(l1c_labelfile) \
+        and (run_writeout==True) and (overwrite==False):
+        print("The target l1c and its label file already exist, skipping")
         return "OK"
         
     # Set number of integration frames to fit 
@@ -2443,7 +2444,7 @@ def start_reader(pipe, output_queue, log_file_path):
     pipe.close()
 
 
-def check_for_success_msg(output_queue, target_phrase, timeout=30):
+def check_for_success_msg(output_queue, target_phrase, timeout=10):
     """
     Read lines from a queue until the last one matches the target_phrase.
     Times out after `timeout` seconds.
