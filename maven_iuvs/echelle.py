@@ -1395,6 +1395,8 @@ def update_metadata_file(the_data_dir, idx_file, geospatial=False):
     
     Parameters
     ----------
+    the_data_dir : string
+                   Base data directory with orbit folders.
     idx_file : dictionary
                Python dictionary describing IUVS file metadata
     geospatial : boolean
