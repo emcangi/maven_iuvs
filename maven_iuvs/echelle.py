@@ -307,7 +307,12 @@ def downselect_data(index, light_dark=None, orbit=None, date=None, segment=None,
 
     # int time
     if binning is not None:
-        selected = [entry for entry in selected if entry['binning'] == binning]
+        if binning=="linear":
+            selected = [entry for entry in selected if 'bintbl' not in entry['binning']]
+        elif binning=="nonlinear":
+            selected = [entry for entry in selected if 'bintbl' in entry['binning']]
+        else:
+            selected = [entry for entry in selected if entry['binning']==binning]
 
     # lat
     if lat is not None:
