@@ -1675,6 +1675,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                        calibration="new", ints_to_fit="all", remove_artifacts=True,
                        save_arrays=False, place_for_arrays=None, 
                        return_each_line_fit=True, 
+                       use_BU_bg=False,
                        do_BU_background_comparison=False, 
                        timing_log=None,
                        run_writeout=True, overwrite=False, make_plots=True, 
@@ -1816,12 +1817,27 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     # Standard fitting, with or without returning the individual fits for each line.
     # ===============================================================================================
+    if use_BU_bg:
+        binning_df = get_binning_df(calibration=calibration)
+        binning_info_dict = binning_df.loc[(binning_df['Nspa'] == get_binning_scheme(light_fits)["nspa"]) & (binning_df['Nspe'] == get_binning_scheme(light_fits)["nspe"])]
+        precalc_bg = make_BU_background(processed_data, binning_info_dict['back_rows_arr'].values[0], get_n_int(light_fits), 
+                                            binning_info_dict, calibration=calibration)
+    else:
+        precalc_bg = np.nan
+    
     # Do basic fit in DN
-    I_fit, H_fit, D_fit, IPH_fit, fit_params, fit_uncertainties = fit_flat_data(light_fits, spectrum, data_unc, bad_frames=i_badframes, ints_to_fit=ints_to_fit,
-                                                                                return_each_line_fit=return_each_line_fit, **kwargs)
+    I_fit, H_fit, D_fit, IPH_fit, fit_params, fit_uncertainties = fit_flat_data(light_fits, spectrum, data_unc, 
+                                                                                BU_bg=precalc_bg,
+                                                                                bad_frames=i_badframes, 
+                                                                                ints_to_fit=ints_to_fit,
+                                                                                return_each_line_fit=return_each_line_fit, 
+                                                                                **kwargs)
     
     # Construct a background array from the fit parameters, which can then be converted like the spectrum
-    bg_fits = make_array_of_fitted_backgrounds(light_fits, fit_params)
+    if use_BU_bg:
+        bg_fits = precalc_bg
+    else:
+        bg_fits = make_array_of_fitted_backgrounds(light_fits, fit_params)
 
     # Compute the brightness data in "photons per s" which has historically been stored in l1cs so we have to do it too
     bright_data_ph_per_s = compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits)
@@ -1926,9 +1942,10 @@ def clean_data(data, all_bad_lights, clean_method="new", remove_rays=True, remov
         if remove_hotpix:
             data = remove_hot_pixels(data, all_bad_lights) 
     elif clean_method=="old":
-        Nwaves = get_binning_scheme(light_fits)["nspe"]
-        Nspaces = get_binning_scheme(light_fits)["nspa"]
-        Nint = get_n_int(light_fits)
+        # raise Exception(f"Shape: {data.shape}")
+        Nwaves = data.shape[2]
+        Nspaces = data.shape[1]
+        Nint = data.shape[0]
         # Cosmic rays
         for w in range(0, Nwaves-1): 
             for s in range(0, Nspaces-1):
