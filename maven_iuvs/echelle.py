@@ -1243,7 +1243,15 @@ def get_countrate_diagnostics(hdul):
     Hlya_spapixrange = np.array([ech_Lya_slit_start, ech_Lya_slit_end])
     Hlya_countrate, Hlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [450, 505])
     
+
     Hbkg_spapixrange = Hlya_spapixrange + 2*(ech_Lya_slit_end-ech_Lya_slit_start)
+    
+    # Modify the background if the file is nonlinear
+    if 'SPE_SIZE' not in hdul['primary'].header:
+        Hbkg_spapixrange += 4  # Since usually this works out to 724, 913, 
+                               # and the nonlinearly binned files have a 
+                               # blackout zone up to pixel 728.
+
     Hbkg_countrate, Hbkg_npix = get_avg_pixel_count_rate(hdul, Hbkg_spapixrange, [450, 505])
     
     Dlya_countrate, Dlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [415, 450])
