@@ -394,8 +394,43 @@ def get_dark_from_keyfile(light_filename, keydf):
         return lf, light_filename, df, dark_filename
 
 
-def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, 
-                                       verbose=True):
+def find_files_missing_in_key(master_key, ech_l1a_idx, cutoff=19964):
+    """
+    Identify files missing in the light/dark key file. Searches before the 
+    'cutoff' orbit, that is, this searches for missing files older than 'today'.
+
+    Parameters
+    ----------
+    master_key : Pandas DataFrame
+                 Content of a given light/dark key file loaded into a df.
+    ech_l1a_idx : list of dictionaries
+                  metadata for some data product level
+    cutoff : int
+             orbit before which missing files will be looked for 
+
+    Returns
+    ----------
+    missing_lights : list of strings
+                     Light observation file names missing in the key
+    """
+    key_lights = set(list(master_key["Light"].values))
+
+    # Get just names in the idx file (lights only)
+    metadata_light_names = set([md['name'] for md in ech_l1a_idx 
+                                if iuvs.echelle.ech_islight(md) 
+                                and "orbit" in md['name']
+                                and (iuvs.miscellaneous.iuvs_orbno_from_fname(md['name']) < cutoff) 
+                               ] )
+
+    # Compare the two lists
+    missing_lights = list(metadata_light_names.difference(key_lights))
+
+    return missing_lights
+
+
+def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
+                                       keyfolder=f"{idl_pipeline_dir}light-dark-pair-lists/",
+                                       verbose=True, return_detail=False):
     """
     Searches the light/dark key csv (keyfile) for any filenames that have since 
     had a revision update. In that sense, the "copy of record" is the copy on 
@@ -412,6 +447,10 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
                Same as above but the dark files only.
     verbose : bool
               If True will print result messages.
+    return_detail : boolean
+                    if True, will also return some dataframes listing changes 
+                    made, problems found, and lights in the key but not on 
+                    disk.
 
     Returns
     ----------
@@ -422,7 +461,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
     problems : pandas DataFrame
                Files that caused a problem
     """
-    def find_match_on_disk(key_filename, parent_folder):
+    def find_match_on_disk(key_filename, parent_folder, orbit_fold_cache):
         """
         Subroutine to search for a similarly named file on the local disk.
 
@@ -439,11 +478,11 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
         """
 
         # get the base filename
-        df_fn_base = re.match(iuvs.miscellaneous.fn_no_version_RE, df_filename)[0]
+        df_fn_base = re.match(iuvs.miscellaneous.fn_no_version_RE, key_filename)[0]
 
         # Look for the matching file on disk 
         disk_filename = None
-        for f in orbit_folder_cache[parent_folder]:
+        for f in orbit_fold_cache[parent_folder]:
             if df_fn_base in f:
                 disk_filename = f
                 break
@@ -475,7 +514,10 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
             else:
                 return False
         
-    MASTER_KEY = pd.read_csv(keyfile)
+    MASTER_KEY = pd.read_csv(keyfolder+keyfile)
+
+    # Write a backup
+    MASTER_KEY.to_csv(keyfile+".bak", index=False)
 
     changes = {"row": [], "oldname": [], "newname": []}
     problems = {"row": [], "oldname": [], "newname": []}
@@ -506,7 +548,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
         key_darkname = row["Dark"]
 
         # Lights --------------------------------------------------------------
-        disk_lightname = find_match_on_disk(key_lightname, lfolder)
+        disk_lightname = find_match_on_disk(key_lightname, lfolder, orbit_folder_cache)
 
         # Catch scenario where light in keyfile is no longer on disk 
         # (may occur if a reprocess is done and a file is missed)
@@ -525,7 +567,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
             # This means we've already investigated this light file 
             continue 
         else:
-            disk_darkname = find_match_on_disk(key_darkname, dfolder)
+            disk_darkname = find_match_on_disk(key_darkname, dfolder, orbit_folder_cache)
 
             if disk_darkname is None: 
                  # This is the spot for the biggest potential for slowdown. 
@@ -554,11 +596,20 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx,
         for i, o, n in zip(changes["row"], changes["oldname"], changes["newname"]):
             print(f"Row {i}: {o} ---> {n}")
 
-    return MASTER_KEY, changes, problems, lights_not_on_disk_but_in_key
+    # Sort it one last time just in case
+    MASTER_KEY_new = sort_ldkey_by_date(MASTER_KEY)
+
+    print("Writing out light/dark pair file")
+    MASTER_KEY_new.to_csv(keyfile, index=False)
+    if not return_detail:
+        return MASTER_KEY_new
+    else:
+        return MASTER_KEY, changes, problems, lights_not_on_disk_but_in_key
 
 
 def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx, 
-                                ld_folder=f"{idl_pipeline_dir}light-dark-pair-lists/"):
+                                    final_filename="MASTER_LIGHT_DARK_KEY.csv",
+                                    keyfolder=f"{idl_pipeline_dir}light-dark-pair-lists/"):
     """
     Previously named 'update_master_lightdark_key'. A wrapper for 
     make_light_and_dark_pair_CSV() that, when called, adds new files to the 
@@ -575,15 +626,17 @@ def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx,
                   includes metadata for all observations throughout mission.
     dark_idx : dictionary
                similar to ech_l1a_index but only includes dark files.
-    ld_folder : string
+    keyfolder : string
                 folder path where key_filename lives
 
     Returns
     ----------
     null - updates and writes out a new CSV.
     """
-    MASTER_KEY =  ld_folder + key_filename 
-    MASTER_KEY = pd.read_csv(MASTER_KEY)
+    keyfile =  keyfolder + key_filename
+    MASTER_KEY = pd.read_csv(keyfile)
+     # Write a backup
+    MASTER_KEY.to_csv(keyfile+".bak", index=False)
     
     # Sort list by the datetime object column (should exist, but if not, it will be created)
     MASTER_KEY_TIMESORT = sort_ldkey_by_date(MASTER_KEY)
@@ -594,9 +647,9 @@ def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx,
 
     # Call the CSV maker which will update it (you can do it in place by giving 
     # it the same fn if you want); this version append's today's date
-    final_filename = f"{key_filename[:-15]}_{datetime.datetime.now().date()}.csv"
     make_light_and_dark_pair_CSV(ech_l1a_idx, dark_idx, l1a_dir,
                                  csv_name=final_filename,
+                                 csv_path=keyfolder,
                                  make_csv_for="selection",
                                  starting_df=MASTER_KEY_TIMESORT, 
                                  date=[last_time, -1])
@@ -635,8 +688,10 @@ def make_light_and_dark_pair_CSV(ech_l1a_idx, dark_index, l1a_dir,
     writes out a CSV file with lights and matching darks. 
     """
     # csv path
-    csv_folder = idl_pipeline_dir + "light-dark-pair-lists/"
-    csv_path = csv_folder + csv_name
+    csv_final_loc = csv_path + csv_name
+
+    # Write a backup
+    os.system(f"cp {csv_path+csv_name} {csv_path+csv_name+'.bak'}")
 
     # Enforce slash.
     if l1a_dir[-1] != "/":
@@ -685,7 +740,7 @@ def make_light_and_dark_pair_CSV(ech_l1a_idx, dark_index, l1a_dir,
     complete_df_sorted = sort_ldkey_by_date(complete_df)
 
     print("Writing out light/dark pair file")
-    complete_df_sorted.to_csv(csv_path, index=False)
+    complete_df_sorted.to_csv(csv_final_loc, index=False)
     print("Done!")
     
     return
