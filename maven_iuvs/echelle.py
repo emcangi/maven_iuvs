@@ -3247,8 +3247,12 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
     # Now do the model 
     DN_fit, *_ = lineshape_model(params, wavelength_data, binedges, CLSF, BU_bg, fit_IPH_component)
 
+    N = len(DN_fit)
     # Fit the model to the existing data assuming Gaussian distributed photo events
-    L = -jnp.sum((data - DN_fit)**2 / (2*(uncertainty**2)))
+
+    # Old: -jnp.sum((data - DN_fit)**2 / (2*(uncertainty**2)))
+    # Corrected:
+    L = -(N/2)*jnp.log(2*math.pi) - jnp.sum(jnp.log(uncertainty) + ((data - DN_fit)**2 / (2*(uncertainty**2)))) 
 
     return L
 
