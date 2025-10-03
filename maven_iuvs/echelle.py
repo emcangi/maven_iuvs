@@ -2731,7 +2731,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 fit_IPH_component=False, BU_bg=np.nan,
                 fitter="dynesty", solver="Powell",
                 approach="static", livepts=100, bound="single", bootstrap=0,
-                hush_warning=True):
+                hush_warning=True, make_dynesty_plots=False):
     """
     Given an initial guess for fit parameters and observational data, this fits the model to the data 
     and minimizes the "badness".
@@ -2907,7 +2907,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
             """
             return (xmax-xmin)*(x-0.5)+(xmax+xmin)/2.0
 
-        def prior_transform(u, param_bounds):
+        def prior_transform(u):
             """
             Transforms the uniform random variable `u ~ Unif[0., 1.)`
             to the parameter of interest.
@@ -2925,27 +2925,29 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 u transformed into the appropriate space for each parameter.
 
             """
+            a = -1.0
+            b = 2.0
+            param_bounds = [
+                [pig[0]*a, pig[0]*b],  # Total DN, H
+                [pig[1]*a, pig[1]*b],  # DN, D
+                [-pig[2]/5, pig[2]*5],  # DN, IPH
+                [pig[3]-0.02, pig[3]+0.02],  # λ Ly a center, H
+                [pig[4]-IPH_wv_spread/2, pig[4]+IPH_wv_spread/2],  # IPH λ
+                [IPH_minw, IPH_maxw],  # IPH width
+                [-1e5, 1e5],  # Background offset
+                [-1e5, 1e5],  # background slope
+                [-1e5, 1e5],  # background quadratic term
+            ]
+            # NOTE: If moving these back outside this subfunction, need to 
+            # enclose the entries in another list for some reason. Format:
+            # [ [ [pig0...], [pig1...]...[pigN] ] ]
+
             x = np.array(u)
             for i in range(len(x)):
                 x[i] = uniform(u[i], param_bounds[i][0], param_bounds[i][1])
 
             return x
 
-        # List of arguments for prior_transform
-        a = -1.0
-        b = 2.0
-        ptf_args = [
-            [[pig[0]*a, pig[0]*b],  # Total DN, H
-             [pig[1]*a, pig[1]*b],  # DN, D
-             [-pig[2]/5, pig[2]*5],  # DN, IPH
-             [pig[3]-0.02, pig[3]+0.02],  # λ Ly a center, H
-             [pig[4]-IPH_wv_spread/2, pig[4]+IPH_wv_spread/2],  # IPH λ
-             [IPH_minw, IPH_maxw],  # IPH width
-             [-1e5, 1e5],  # Background offset
-             [-1e5, 1e5],  # background slope
-             [-1e5, 1e5],  # background quadratic term
-             ]
-        ]
 
         if approach == "dynamic":
             try:
@@ -2985,6 +2987,43 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
         # Continue on if all is ok
         dresults = dsampler.results
+
+        # Make some cool plots
+        if make_dynesty_plots:
+            from dynesty import plotting as dyplot
+            _short_param_names = [r'I$_H$', r'I$_D$', r'I$_{IPH}$', 
+                                  r'$\lambda_H$', r'$\lambda_{IPH}$', 
+                                  r'width$_{IPH}$', 'b', 'm', 'm2']
+
+            # Basic time progression plot
+            dyplot.runplot(dresults)
+
+            # Plot Traceplot
+            dyplot.traceplot(dresults, labels=_short_param_names)
+        
+            # Bound plot
+            fig3, axes3 = plt.subplots(3,4, figsize=(16, 10))
+            for i, a in enumerate(axes3.flatten()):
+                it = int((i+1)*dresults.niter/12.)
+                # overplot the result onto each subplot
+                temp = dyplot.boundplot(dresults, dims=(0, 1), it=it,
+                                        prior_transform=prior_transform,
+                                        max_n_ticks=3, show_live=True,
+                                        fig=(fig3, a), labels=_short_param_names)
+                a.set_title('Iteration {0}'.format(it), fontsize=26)
+            fig3.tight_layout()
+
+            # Corner plot
+            if fit_IPH_component:
+                dims = [i for i,e in enumerate(_short_param_names)]
+                lbls = [e for i,e in enumerate(_short_param_names)]
+            else:
+                dims = _fit_parameter_non_IPH_idxs
+                these_names = [n for i,n in enumerate(_short_param_names) if 'IPH' not in n] 
+                lbls = [e for i,e in enumerate(these_names)]
+            fig4, ax4 = dyplot.cornerplot(dresults, dims=dims, color="cornflowerblue", 
+                                          labels=lbls, label_kwargs={"labelpad": 1e8})
+            
 
         samples = dresults.samples
         weights = dresults.importance_weights()
