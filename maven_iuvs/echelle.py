@@ -515,10 +515,11 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
             else:
                 return False
         
-    MASTER_KEY = pd.read_csv(keyfolder+keyfile)
+    KEYPATH = keyfolder+keyfile
+    MASTER_KEY = pd.read_csv(KEYPATH)
 
     # Write a backup
-    MASTER_KEY.to_csv(keyfile+".bak", index=False)
+    MASTER_KEY.to_csv(KEYPATH+".bak", index=False)
 
     changes = {"row": [], "oldname": [], "newname": []}
     problems = {"row": [], "oldname": [], "newname": []}
@@ -541,6 +542,12 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
 
     # Keep[ track of any missing lights that seem to have once existed
     lights_not_on_disk_but_in_key = []
+
+    # Open Majd's savfile in case we need to look in there - some darks were
+    # selected by Majd by eye.
+    old_key_sav = sp.io.readsav(keyfolder + "ech_light_dark_fnames_Mayyasi_20230223.sav")
+    old_key_lights = [l.decode('utf-8') for l in old_key_sav['lname_arr']]
+    old_key_darks = [d.decode('utf-8') for d in old_key_sav['dname_arr']]
     
     for i, row in tqdm(MASTER_KEY.iterrows(), total=len(MASTER_KEY)):
         lfolder = row["Light Folder"]
@@ -570,18 +577,37 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
         else:
             disk_darkname = find_match_on_disk(key_darkname, dfolder, orbit_folder_cache)
 
-            if disk_darkname is None: 
+            if disk_darkname is None:
                  # This is the spot for the biggest potential for slowdown. 
                  # Luckily, it will only be slow hopefully the first time. 
                  # The function is fast as long as new darks aren't needed.
                 dpath, disk_darkname = get_dark_path(lfolder + key_lightname, 
                                                      ech_l1a_idx, dark_idx, 
                                                      return_sep=True)
+                
+                # If it still wasn't found, try searching Majd's key
+                if disk_darkname is None:
+                    # Get the unique ID
+                    luid = re.search(iuvs.miscellaneous.uniqueID_RE, disk_lightname).group(0)
+
+                    # Loop through Majd file looking for the light
+                    for (l,d) in zip(old_key_lights, old_key_darks):
+                        # check if unique ID matches light
+                        if luid in l:
+                            # If so, find dark on disk, but only if it's not a fake
+                            if "T000000" not in d: # Some entries have a bad time tag, aren't real files.
+                                disk_darkname = find_match_on_disk(d, dfolder, orbit_folder_cache)
+                            break
+
+                # After all that if still no dark, set to special message 
+                if disk_darkname is None:
+                    disk_darkname = "No valid dark found"
+
                 new_darknames.loc[i] = disk_darkname
                 changes["row"].append(i)
                 changes["oldname"].append(key_darkname)
                 changes["newname"].append(disk_darkname)
-            else: 
+            else:
                 if name_should_be_updated(key_darkname, disk_darkname):
                     new_darknames.loc[i] = disk_darkname
                     changes["row"].append(i)
@@ -600,15 +626,18 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
     # Sort it one last time just in case
     MASTER_KEY_new = sort_ldkey_by_date(MASTER_KEY)
 
+    # Drop potential duplicates
+    MASTER_KEY_new.drop_duplicates(inplace=True, ignore_index=True)
+
     print("Writing out light/dark pair file")
-    MASTER_KEY_new.to_csv(keyfile, index=False)
+    MASTER_KEY_new.to_csv(KEYPATH, index=False)
     if not return_detail:
         return MASTER_KEY_new
     else:
         return MASTER_KEY, changes, problems, lights_not_on_disk_but_in_key
 
 
-def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx, 
+def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx, v="v13",
                                     final_filename="MASTER_LIGHT_DARK_KEY.csv",
                                     keyfolder=f"{idl_pipeline_dir}light-dark-pair-lists/"):
     """
@@ -651,6 +680,7 @@ def add_new_files_to_light_dark_key(key_filename, ech_l1a_idx, dark_idx,
     make_light_and_dark_pair_CSV(ech_l1a_idx, dark_idx, l1a_dir,
                                  csv_name=final_filename,
                                  csv_path=keyfolder,
+                                 version=v,
                                  make_csv_for="selection",
                                  starting_df=MASTER_KEY_TIMESORT, 
                                  date=[last_time, -1])
