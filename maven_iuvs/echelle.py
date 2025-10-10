@@ -2412,12 +2412,13 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                                  )
     
     # Save the output to some temporary files that will be saved outside the Python module.
-    # TODO: Make these actual temp files.
-    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
+    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+
+    # Collect the names for use 
     all_fits_csv_path = all_fits_csv_tf.name
-    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
     brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
-    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv')
     ph_per_s_csv_path = ph_per_s_csv_tf.name
     
     # Have to make a different value for NaN for IDL
@@ -2477,6 +2478,11 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
 
     with stdout_queue.mutex:
         stdout_queue.queue.clear()
+
+    # Delete the temp files once finished TODO: TEST!
+    Path.unlink(all_fits_csv_path)
+    Path.unlink(brightness_and_linectr_csv_path)
+    Path.unlink(ph_per_s_csv_path)
 
     return returnval
 
