@@ -36,5 +36,7 @@ setuptools.setup(
         'scipy>=1.11.2',
         'scikit-image>=0.21.0'
         'importlib_resources>=6.4.3'
+        'scikit-image>=0.21.0',
+        'jax>0.5.0'
     ]
 )
