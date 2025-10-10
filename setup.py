@@ -34,6 +34,8 @@ setuptools.setup(
         'h5py>=2.10.0',
         'idl_colorbars>=1.1.2',
         'scipy>=1.11.2',
+        'scikit-image>=0.21.0'
+        'importlib_resources>=6.4.3'
         'scikit-image>=0.21.0',
         'jax>0.5.0'
     ]
