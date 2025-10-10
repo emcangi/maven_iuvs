@@ -1,26 +1,42 @@
-import datetime
+# Built-in stuff
 import pytz
+import math
+import time
+import datetime
 import tempfile
-import numpy as np
-import scipy as sp
-from astropy.io import fits
-import textwrap
+from statistics import median_high
 import os 
-import csv
 import copy
-import skimage as ski
+import re
+import subprocess
+import threading
+import queue
+
+# Third party imports
+from astropy.io import fits
+import jax
+import jax.numpy as jnp
+import jax.scipy as jsp
+from jax import config as jax_config
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gs
-import warnings
-import math
-import time
-from pathlib import Path
-import re 
-import pandas as pd
-import subprocess
-from tqdm.auto import tqdm
+import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
+from numpy.linalg import inv
+import pandas as pd
+import scipy as sp
+from statsmodels.tools.numdiff import approx_hess1, approx_hess2, approx_hess3
+import textwrap
+import csv
+import skimage as ski
+import warnings
+from pathlib import Path
+from tqdm.auto import tqdm
+import dynesty as d
+from dynesty import utils as dyfunc
+
+# maven stuff
 import maven_iuvs as iuvs
 from maven_iuvs.binning import get_bin_edges, pix_to_bin, get_binning_scheme, get_bin_pix_boundaries
 from maven_iuvs.constants import D_offset, IPH_wv_spread, IPH_minw, IPH_maxw
@@ -37,21 +53,11 @@ from maven_iuvs.geometry import has_geometry_pvec, get_mean_mrh
 from maven_iuvs.pds import get_pds_dates
 from maven_iuvs.search import get_latest_files, find_files, dropxml
 from maven_iuvs.integration import get_avg_pixel_count_rate
-from statistics import median_high
 from maven_iuvs.user_paths import l1a_dir, idl_pipeline_dir
-from statsmodels.tools.numdiff import approx_hess1, approx_hess2, approx_hess3
-from numpy.linalg import inv
-import dynesty as d
-from dynesty import utils as dyfunc
 from maven_iuvs.spice import load_iuvs_spice
 import spiceypy as chilisnake
-import jax
-import jax.numpy as jnp
-import jax.scipy as jsp
-from jax import config as jax_config
+
 #jax_config.update('jax_disable_jit', True)
-import threading
-import queue
 
 # WEEKLY REPORT CODE ==================================================
 
