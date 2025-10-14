@@ -122,7 +122,7 @@ def pix_to_bin(hdul, pix0, pix1, spa_or_spe, return_npix=True):
     i1_transmitted_bins = i1_allbins - np.cumsum(spapix_not_transmit)[i1_allbins]
 
     if return_npix:
-        binpixwidth = hdul['Binning'].data[spa_or_spe+'BINWIDTH']
+        binpixwidth = hdul['Binning'].data[spa_or_spe+'BINWIDTH'][0]
         npix = np.sum(binpixwidth[i0_allbins:i1_allbins])
         return i0_transmitted_bins, i1_transmitted_bins, npix
 
