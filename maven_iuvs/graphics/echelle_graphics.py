@@ -1031,11 +1031,29 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
         if "failed_fit" in fit_params_for_printing:
             printme.append("Bad frame - no fit.")
         else:
-            if "maxLL" in fit_params_for_printing:
-                printme.append(f"Min chi sq.: {round(fit_params_for_printing['maxLL']) * 2}") # * 2 because we want to show chi squared
+            N = len(data_wavelengths)
+
+            if "maxLL" in fit_params_for_printing or "min_neg_LL" in fit_params_for_printing: 
+            # If either scipy or dynest was run,
+                if "maxLL" in fit_params_for_printing:
+                    maxLL = fit_params_for_printing['maxLL']
+
+                if "min_neg_LL" in fit_params_for_printing:
+                    maxLL = -1 * fit_params_for_printing['min_neg_LL']
+
+                printme.append(r"max $\ln\mathcal{L}$: "+f"{round(maxLL)}")
+
+                # Compute chisquared
+                chisq = round(-2 * (maxLL + (N*np.log(2*math.pi)/2) + np.sum(np.log(data_unc))))
+                reduced_chisq = round(chisq / (N-len(fit_params_for_printing.keys()) -1 ), 2)
+                printme.append(r"$\chi^2$: "+f"{chisq}")
+                printme.append(r"$\tilde{\chi}^2$: "+f"{reduced_chisq}")
+
             if "minchisq" in fit_params_for_printing: 
+                # Sometimes we plot IDL output, which reports min. chisq, which is secretly reduced chisq.
                 printme.append(r"$\tilde{\chi}^2$: " + f"{round(fit_params_for_printing['minchisq'], 2)}")
 
+            # Now do the stuff that should always be there....
             printme.append(f"H: {round(fit_params_for_printing['total_brightness_H'], 2)} ± {round(fit_params_for_printing['unc_total_brightness_H'], 2)} "+
                         f"kR (SNR: {round(fit_params_for_printing['total_brightness_H'] / fit_params_for_printing['unc_total_brightness_H'], 1)})")
             printme.append(f"D: {round(fit_params_for_printing['total_brightness_D'], 2)} ± {round(fit_params_for_printing['unc_total_brightness_D'], 2)} "+

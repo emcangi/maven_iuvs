@@ -2172,7 +2172,12 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         # Now make into dictionaries, excluding the max log likelihood since 
         # it's not included in the parameter names
         fit_params_dict = make_fit_param_dict(fit_params[:-1])
-        fit_params_dict['maxLL'] = fit_params[-1] # Add max log likeilhood 
+
+        # Package used affects what was done. Get it right
+        if kwargs['fitter']=='scipy':
+            fit_params_dict['min_neg_LL'] = fit_params[-1]
+        elif kwargs['fitter']=='dynesty':
+            fit_params_dict['maxLL'] = fit_params[-1]
         fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
        
         if i in bad_frames:
@@ -2851,7 +2856,12 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
 
     # Now call the fitting routine
+    a = -1.0
+    b = 2.0
+    
     if fitter == "scipy":
+        x_tol = 1e-5
+        f_tol = 1e-8
         try:
             bestfit = sp.optimize.minimize(negloglikelihood_jit, pig,
                                            args=objfn_args,
@@ -2859,21 +2869,23 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                                            # for xtol and ftol, at least 1e-3 
                                            # is required for happiness; 
                                            # 1e-4 is default
-                                           options={"xtol":1e-5,  
-                                                   "ftol":1e-5},
-                                           bounds=[(None, None),  # DN_H
-                                                   (None, None),  # DN_D
-                                                   (None, None),  # DN_IPH
-                                                   (121.55, 121.58),  # λ H 
+                                           
+                                           options={"xtol": x_tol,  
+                                                   "ftol": f_tol},
+                                           bounds=[(pig[0]*a, pig[0]*b),  # DN_H
+                                                   (pig[1]*a, pig[1]*b),  # DN_D
+                                                   (-pig[2]/5, pig[2]*5),  # DN_IPH
+                                                   (pig[3]-0.02, pig[3]+0.02),  # λ H 
                                                    # IPH λ:
                                                    (pig[4]-IPH_wv_spread/2,
                                                    pig[4]+IPH_wv_spread/2),
                                                    # IPH width in nm:
                                                    (IPH_minw, IPH_maxw),
                                                    # Background terms:
-                                                   (None, None), # intercept
-                                                   (None, None), # linear term
-                                                   (None, None)] # quadratic
+                                                   (-1e5, 1e5), # intercept
+                                                   (-1e5, 1e5), # linear term
+                                                   (-1e5, 1e5) # quadratic
+                                                   ] 
                         )
 
         except ValueError as e:
@@ -3069,7 +3081,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
         samples = dresults.samples
         weights = dresults.importance_weights()
-        max_logl = -max(dresults.logl)
+        max_logl = max(dresults.logl)
 
         modeled_params, covariance = dyfunc.mean_and_cov(samples, weights)
         fit_uncert = np.sqrt(np.diag(covariance))
@@ -3292,10 +3304,9 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
     N = len(DN_fit)
     # Fit the model to the existing data assuming Gaussian distributed photo events
 
-    # Old: -jnp.sum((data - DN_fit)**2 / (2*(uncertainty**2)))
-    # Corrected:
-    L = -(N/2)*jnp.log(2*math.pi) - jnp.sum(jnp.log(uncertainty) + ((data - DN_fit)**2 / (2*(uncertainty**2)))) 
-
+    L = - (N/2)*jnp.log(2*math.pi) \
+        - jnp.sum(jnp.log(uncertainty) \
+        + ((data - DN_fit)**2 / (2*(uncertainty**2))))
     return L
 
 loglikelihood_jit = jax.jit(loglikelihood, static_argnums=[7])
