@@ -129,7 +129,7 @@ def pix_to_bin(hdul, pix0, pix1, spa_or_spe, return_npix=True):
     return i0_transmitted_bins, i1_transmitted_bins
 
 
-def get_bin_pix_boundaries(myfits, which):
+def get_bin_pix_boundaries(myfits, which, return_high_bdys=False):
     """Given a fits observation, gets the bin lower boundaries in pixels,
     and whether that bin was transmitted, for either the spatial or
     spectral dimension.
@@ -156,10 +156,14 @@ def get_bin_pix_boundaries(myfits, which):
     pixwidth = myfits['Binning'].data[f'{which[:3]}binwidth'][0]
     pixtransmit = myfits['Binning'].data[f'{which[:3]}bintransmit'][0]
 
-    pixboundaries = np.cumsum(pixwidth)
-    pixboundaries = np.concatenate([[0], pixboundaries])
+    pix_low_boundaries = np.cumsum(pixwidth)
+    pix_low_boundaries = np.concatenate([[0], pix_low_boundaries])
 
-    return pixboundaries, pixtransmit
+    if return_high_bdys:
+        pix_high_boundaries = pix_low_boundaries[:-1] + pixwidth
+        return pix_low_boundaries, pixtransmit, pix_high_boundaries
+
+    return pix_low_boundaries, pixtransmit
 
 
 def get_npix_per_bin(myfits, transmitted_only=True):
