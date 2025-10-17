@@ -11,24 +11,23 @@ from astropy.io import fits
 import argparse
 from pathlib import Path
 
-# deal with stupid problems with statistics.py now that this script lives here.
-# Stolen from Lumo
+# statistics.py is duplicated in maven_iuvs, but it's also a base package.
+# this causes problems when this script lives where maven_iuvs lives.
+# Deal with it by shuffling the path info
 stdlib_path = next(p for p in sys.path if 'site-packages' not in p and 'dist-packages' not in p)
 if stdlib_path not in sys.path:
     sys.path.insert(0, stdlib_path)
 
-# Optionally remove the directory that holds your local module from the front.
-# Example: if your script lives in /home/user/project/
 project_dir = os.path.abspath(os.path.dirname(__file__))
 if project_dir in sys.path:
     sys.path.remove(project_dir)
     sys.path.append(project_dir)
 
-import maven_iuvs as iuvs
+import maven_iuvs as iuvs # look, idk why, but it breaks if this isn't here.
 from maven_iuvs.download import get_default_data_directory
 from maven_iuvs.echelle import get_dir_metadata, make_dark_index, \
     find_files_with_geometry, downselect_data, convert_l1a_to_l1c, \
-    open_IDL_and_compile_writeout_script, get_dark_from_keyfile
+    get_dark_from_keyfile
 from maven_iuvs.miscellaneous import orbit_folder
 
 # SET UP ======================================================================
@@ -42,7 +41,7 @@ binning = None  # "nonlinear" #  can specify nonlienar to redo those files.
 if binning=="nonlinear":
     print("WARNING! Only running nonlinear files! Is that what you wanted?")
 reportext = ""  # Extra text to append to procesisng report filename
-overwrite = False
+overwrite = True
 idl_process_kwargs = {}
 
 # ARG PARSE 
@@ -278,7 +277,6 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
     compile_watcher.start()
 
     # compile script
-    # print("Trying to compile IDL script")
     proc.stdin.write(".com write_l1c_file_from_python.pro\n")
     proc.stdin.flush()
 
@@ -296,7 +294,7 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
     try:
         while True:
             item = idl_cmd_q.get()
-            if item is None:               # sentinel → shutdown
+            if item is None:
                 break
             proc.stdin.write(item.rstrip("\n") + "\n")
             proc.stdin.flush()
@@ -414,7 +412,7 @@ def main():
                 print("Opening IDL and loading the MAVEN environment")
                 
                 # Set up queues for IDL: queue for calling the writeout script
-                idl_cmd_q = manager.Queue()        # optional back‑pressure
+                idl_cmd_q = manager.Queue()
 
                 # Set up the output log path 
                 oln = this_orbfold + f"IDLoutput_{startorb}-{startorb+100}.txt"
@@ -429,12 +427,7 @@ def main():
                                             eln))   
                 IDLwriter.start()
 
-                # idlproc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script("", errlogname=eln)
-
-                idl_process_kwargs={"open_idl": False, 
-                                    #"proc": idlproc, 
-                                    # "stderr_queue": stderr_queue, 
-                                    # "stderr_thread": stderr_thread,
+                idl_process_kwargs={"open_idl": False,
                                     "cmd_queue": idl_cmd_q}
             else:
                 print("File writeout not requested, IDL will not be opened")
@@ -443,17 +436,18 @@ def main():
             resdict_thisorb = manager.dict({"OK": [], "no_light": [], 
                                             "no_dark": [], "other": [], 
                                             "other_log": []})
-            lock = manager.Lock() # safeguard the dict
+            lock = manager.Lock()
             
 
             # PROCESS *ALL* THE FILES!!!!!
             with ctx.Pool(processes=os.cpu_count()) as pool:
                 pool.starmap(obs_worker, 
-                            [(process_timestamp, obs, this_orbfold, ld_pairs, resdict_thisorb, \
-                              lock, idl_process_kwargs, clean_kwargs) 
+                            [(process_timestamp, obs, this_orbfold, ld_pairs, 
+                              resdict_thisorb, lock, idl_process_kwargs, 
+                              clean_kwargs) 
                             for obs in obs_to_process]
                             )
-                idl_cmd_q.put(None)       # sentinel
+                idl_cmd_q.put(None) # Tell the queue sentinel to quit
                 pool.close()
                 pool.join() 
             
