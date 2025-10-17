@@ -1,34 +1,49 @@
+import sys
 import os
 import datetime
+import queue
+import threading
+import subprocess
+import multiprocessing as mp
 import pandas as pd
 import numpy as np
-from tqdm.auto import tqdm
 from astropy.io import fits
 import argparse
+from pathlib import Path
 
-# Multiprocessing-----------
-import multiprocessing as mp
-mp.set_start_method('fork')
-# --------------------------
+# deal with stupid problems with statistics.py now that this script lives here.
+# Stolen from Lumo
+stdlib_path = next(p for p in sys.path if 'site-packages' not in p and 'dist-packages' not in p)
+if stdlib_path not in sys.path:
+    sys.path.insert(0, stdlib_path)
 
+# Optionally remove the directory that holds your local module from the front.
+# Example: if your script lives in /home/user/project/
+project_dir = os.path.abspath(os.path.dirname(__file__))
+if project_dir in sys.path:
+    sys.path.remove(project_dir)
+    sys.path.append(project_dir)
 
-# import maven_iuvs as iuvs
-# from maven_iuvs.user_paths import idl_pipeline_dir
+import maven_iuvs as iuvs
 from maven_iuvs.download import get_default_data_directory
 from maven_iuvs.echelle import get_dir_metadata, make_dark_index, \
     find_files_with_geometry, downselect_data, convert_l1a_to_l1c, \
     open_IDL_and_compile_writeout_script, get_dark_from_keyfile
-from maven_iuvs.miscellaneous import orbit_folder#, iuvs_orbno_from_fname
+from maven_iuvs.miscellaneous import orbit_folder
+
+# SET UP ======================================================================
 
 DO_WRITEOUT = True # If True, IDL will run.
 make_plots = False
 save_arrays = False
 fitter = "scipy" # "dynesty"
-binning = None# "nonlinear"
-report_append_text = ""
+binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
+                # Had to do this at one point due to an IDL problem.
+if binning=="nonlinear":
+    print("WARNING! Only running nonlinear files! Is that what you wanted?")
+reportext = ""  # Extra text to append to procesisng report filename
 overwrite = False
-# print("WARNING! Redoing nonlinear files. Go back to v15_pipeline and set "
-#       "binning=None and overwrite=False if this is not your intention!!")
+idl_process_kwargs = {}
 
 # ARG PARSE 
 # =============================================================================
@@ -53,7 +68,7 @@ DO_PERI = False
 DO_CLEANUP_TEST = False
 
 IUVS_FOLD = "/home/emc/Insync/OneDrive-CU/Research/IUVS/"
-# IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
+IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
 # L1c base 
 IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
 L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Round3_scipy_parallel/"
@@ -66,11 +81,18 @@ keyname = "MASTER_LIGHT_DARK_KEY_v14.csv"
           #input("Please type name of light/dark key to use with .csv: ")
 PF = "/home/emc/GITREPOS/maven_iuvs/maven_iuvs/ancillary/" + keyname
 
-# WORKER FUNCTION FOR PARALLELIZATION =========================================
-def process_observation(obs_md, subfoldpath, ldkey):
+# WORKER FUNCTIONS FOR PARALLELIZATION ========================================
+
+def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kwargs=None,
+                        idl_process_kwargs=None):
     """
-    Load the input files and fit the frames in the observation. Return a status
+    Specific process for setting up and performing fits to frames within an 
+    observation defined my obs_md. Keeps things tidy by returning at various 
+    points, which is better than more awkward control flow if this was part of 
+    obs_worker(). See that function for the arguments. 
     """
+    ti = datetime.datetime.now()
+
     # Search it in the CSV
     lfold, ln, dfold, dn = get_dark_from_keyfile(obs_md["name"], ldkey)
 
@@ -96,15 +118,15 @@ def process_observation(obs_md, subfoldpath, ldkey):
 
         # And make a folder for this file for all the line fit plots
         if make_plots:
-            PLACE_FOR_FIGS = subfoldpath + f"{l1c_fn}" + "/plot_fits/"
+            PLACE_FOR_FIGS = orbfold + f"{l1c_fn}" + "/plot_fits/"
             if not os.path.exists(PLACE_FOR_FIGS):
                 os.makedirs(PLACE_FOR_FIGS)
-            pk = {"fig_savepath": PLACE_FOR_FIGS}
+            plot_kwargs = {"fig_savepath": PLACE_FOR_FIGS}
         else:
-            pk = {}
+            plot_kwargs = {}
 
         if save_arrays:
-            PLACE_FOR_ARRAYS = subfoldpath + f"{l1c_fn}" + "/plotted_arrays/"
+            PLACE_FOR_ARRAYS = orbfold + f"{l1c_fn}" + "/plotted_arrays/"
             if not os.path.exists(PLACE_FOR_ARRAYS):
                 os.makedirs(PLACE_FOR_ARRAYS)
         else:
@@ -112,7 +134,7 @@ def process_observation(obs_md, subfoldpath, ldkey):
 
         # Call the conversion 
         status = convert_l1a_to_l1c(lf, df, lfold+ln, dfold+dn,
-                                    subfoldpath, 
+                                    orbfold, 
                                     fitter=fitter,
                                     overwrite=overwrite,
                                     process_timestamp=process_timestamp,
@@ -120,22 +142,171 @@ def process_observation(obs_md, subfoldpath, ldkey):
                                     place_for_arrays=PLACE_FOR_ARRAYS,
                                     calibration="new", 
                                     make_plots=make_plots,
-                                    clean_data_kwargs=clean_kwargs,                       
-                                    plot_kwargs=pk,
+                                    clean_data_kwargs=clean_data_kwargs,                       
+                                    plot_kwargs=plot_kwargs,
                                     run_writeout=DO_WRITEOUT,
                                     idl_process_kwargs=idl_process_kwargs,
                                     )
 
         tf = datetime.datetime.now()
 
-        print(f"Finished with file {obsfile['name']} in {tf-ti} seconds. ")
+        print(f"Finished with file {obs_md['name']} in {tf-ti} seconds. ")
         print("continuing...")
         print()
         return status 
 
     except Exception as excep:
-        return f"Caught an error: {excep} ...moving on..."
+        return f"Caught an error: {excep}"
 
+
+def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock, idl_process_kwargs, clean_data_kwargs):
+    """
+    Worker function for a particular file;
+
+    Parameters
+    ----------
+    obs_md : dictionary
+             Dictionary of metadata for a specific observation file.
+    orbfold : string
+              Path to the orbit folder that obs_md results belong in.
+    ldkey : Pandas dataframe
+            Light/dark pair dataframe
+    shared_results : multiprocessing.Manager.dict() object
+                     Used to safely cache results of the processing generated
+                     by the worker pool.
+    
+    Returns
+    ----------
+    None
+    """
+    result = process_observation(obs_md, orbfold, ldkey, process_timestamp,
+                                 clean_data_kwargs=clean_data_kwargs,
+                                 idl_process_kwargs=idl_process_kwargs)
+
+    _record_result(obs_md, result, shared_results, lock)
+
+
+def _record_result(obs_md, result, shared_results, lock):
+    """Thread/process‑safe update of the shared result dict."""
+    with lock:
+        if "OK" in result:
+            shared_results['OK'] = shared_results['OK'] + [obs_md]
+        elif result=="Light not in the key":
+            shared_results['no_light'] = shared_results['no_light'] + [obs_md]
+        elif result=="No valid dark found":
+            shared_results['no_dark'] = shared_results['no_dark'] + [obs_md]
+        elif "error" in result:
+            shared_results['other'] = shared_results['other'] + [obs_md]
+            shared_results['other_log'] = shared_results['other_log'] + [f"{result}"]
+
+
+def tee_reader(pipe, log_path: str, out_queue: queue.Queue | None = None):
+    """
+    Reads line‑by‑line from ``pipe`` (stdout or stderr),
+    writes each line to ``log_path`` and optionally puts the line
+    into ``out_queue``.
+    """
+    with open(log_path, "a", encoding="utf-8") as f:
+        for line in iter(pipe.readline, ""):          # blocks until a line or EOF
+            f.write(line)
+            f.flush()
+            if out_queue is not None:
+                out_queue.put(line)                   # non‑blocking (unbounded queue)
+    pipe.close()                                  # signal EOF to the producer
+
+
+def phrase_watcher(src_queue: queue.Queue,
+                   phrase: str,
+                   found_event: threading.Event,
+                   stop_event: threading.Event):
+    """
+    Consumes ``src_queue`` until ``phrase`` is observed or ``stop_event`` is set.
+    When the phrase is found, ``found_event`` is set and the function returns.
+    """
+    while not stop_event.is_set():
+        try:
+            # Use a short timeout so we can react to ``stop_event`` promptly.
+            line = src_queue.get(timeout=0.2)
+        except queue.Empty:
+            continue
+
+        if phrase in line:
+            found_event.set()
+            # We still drain the queue so the tee_reader can finish cleanly.
+            # (Otherwise the queue could fill up and block the tee_reader.)
+            while not src_queue.empty():
+                src_queue.get_nowait()
+            break
+
+
+def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path, 
+               idl_errlog_path):
+    """does the heavy lifting."""
+    os.chdir(idl_pipeline_dir)
+    
+    # Open the IDL process
+    proc = subprocess.Popen(idl_cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True, bufsize=1)
+
+    # Start a queue for stderr so we can watch for script compilation success
+    err_queue = queue.Queue()
+
+    # start stderr thread that keeps track of IDL output
+    errlog_thread = threading.Thread(target=tee_reader, 
+                                     args=(proc.stderr, idl_errlog_path, err_queue), 
+                                     daemon=True)
+    errlog_thread.start()
+
+    outlog_thread = threading.Thread(target=tee_reader, 
+                                     args=(proc.stdout, idl_outlog_path), 
+                                     daemon=True)
+    outlog_thread.start()
+
+
+    # Watcher that listens for script compilation success --------------------------------------------
+    compile_phrase = "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON."
+    compiled_evt = threading.Event()
+    stop_watcher_evt = threading.Event()
+    compile_watcher = threading.Thread(
+        target=phrase_watcher,
+        args=(err_queue, compile_phrase, compiled_evt, stop_watcher_evt),
+        daemon=True,
+    )
+    compile_watcher.start()
+
+    # compile script
+    # print("Trying to compile IDL script")
+    proc.stdin.write(".com write_l1c_file_from_python.pro\n")
+    proc.stdin.flush()
+
+    compile_timeout = 3
+    if not compiled_evt.wait(timeout=compile_timeout):
+        stop_watcher_evt.set()
+        raise TimeoutError(f"Compile phrase not seen within {compile_timeout}s")
+
+    # Token found – we can stop the watcher cleanly
+    stop_watcher_evt.set()
+    compile_watcher.join(timeout=1)
+
+    # ------------------------------------------------------------------------------
+                    
+    try:
+        while True:
+            item = idl_cmd_q.get()
+            if item is None:               # sentinel → shutdown
+                break
+            proc.stdin.write(item.rstrip("\n") + "\n")
+            proc.stdin.flush()
+    finally:
+        proc.stdin.close()
+        proc.wait()
+    
+        # Wait for the reader thread to drain any remaining output
+        outlog_thread.join(timeout=2)
+        errlog_thread.join(timeout=2)
 
 # LOAD LIGHT/DARK PAIR CSV
 # =============================================================================
@@ -171,7 +342,6 @@ if DO_FMR:
         if not os.path.isdir(L1C_DIR + f'orbit{so:05}'):
             makeme = L1C_DIR + f'orbit{so:05}/'
             os.mkdir(makeme)
-
 elif DO_LIMB:
     clean_kwargs = {}
     limbdata_temp = downselect_data(lights_with_geom, light_dark="light", 
@@ -213,121 +383,129 @@ elif DO_CLEANUP_TEST:
 
 print(f"Total files to process: {sum([len(m) for m in metadata_lists])}")
 
-# IDL 
-# =============================================================================
-eln = "IDLerrors.txt" 
-if DO_WRITEOUT: 
-    print("Opening IDL and loading the MAVEN environment")
-
-    # Open a file for output
-    # outputfile = open(L1C_DIR + "IDLoutput.txt", "w")
-    # errorfile = open(L1C_DIR + "IDLerrors.txt", "w")
-
-    # Open IDL
-    # idl_pipeline_folder = idl_pipeline_dir
-    # os.chdir(idl_pipeline_dir)
-    # idlproc = subprocess.Popen("idl", stdin=subprocess.PIPE,
-    #                            stdout=outputfile, stderr=errorfile,
-    #                            text=True, bufsize=1) 
-    # bufsize=1 forces information to go through pipe to stdin, stdout instead 
-    # of getting stuck
-    # may need a time.sleep(60*5) here if loading a huge number of kernels
-
-    # print("IDL is now open")
-
-    # Compile our script
-    # idlproc.stdin.write(".com write_l1c_file_from_python.pro\n")
-    # idlproc.stdin.flush()
-    # print("Compiled the script, hopefully anyway")
-    # time.sleep(3)
-    idlproc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(L1C_DIR, errlogname=eln)
-
-    idl_process_kwargs={"open_idl": False, "proc": idlproc, 
-                        "stderr_queue": stderr_queue, 
-                        "stderr_thread": stderr_thread}
-else:
-    idl_process_kwargs={}
-    print("File writeout not requested, IDL will not be opened")
 
 # SET UP LOOP 
 # =====================================================================================================================================
 
-# get date time here because it's hard to do in IDL
-process_timestamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
+def main():
 
+    # get date time here because it's hard to do in IDL
+    process_timestamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
 
-    # with multiprocessing.Pool() as pool:
-    #     # Use pool.map() to apply worker_function to each item in data_items
-    #     # pool.map distributes the items among the worker processes
-    #     results = pool.map(worker_function, data_items)
+    ctx = mp.get_context("spawn")
 
-for i, startorb in enumerate(orbit_folders_to_run):
-    this_md = metadata_lists[i]
-
-    # Log problems
-    successful_obs = [] #  Now that we track  IDL output we can keep track here
-    problem_obs = []
-    exception_log = []
-    not_in_dark_key = []
-    no_dark = [] 
-
-    # Get the orbit subfolder
-    orbfold = orbit_folder(startorb)
-    orbit_subfolder_path = f"{L1C_DIR}{orbfold}/"
-
-    # Loop over the observations
-    for obsfile in tqdm(this_md):
-        print(f"Processing {obsfile['name']}")
-        ti = datetime.datetime.now()
+    with ctx.Manager() as manager:
+        # Loop over orbit folders
         
-        result = process_observation(obsfile, orbit_subfolder_path, ld_pairs)
+        for i, startorb in enumerate(orbit_folders_to_run):
+            print(f"Now working: {startorb}")
+
+            # Get the orbit subfolder
+            this_orbfold = f"{L1C_DIR}{orbit_folder(startorb)}/"
+            if not os.path.exists(this_orbfold):
+                os.mkdir(this_orbfold)
+
+            # Get files to process for this orbit: list of dictionaries
+            obs_to_process = metadata_lists[i]
+                
+            # IDL 
+            # =============================================================================
+            if DO_WRITEOUT: 
+                print("Opening IDL and loading the MAVEN environment")
+                
+                # Set up queues for IDL: queue for calling the writeout script
+                idl_cmd_q = manager.Queue()        # optional back‑pressure
+
+                # Set up the output log path 
+                oln = this_orbfold + f"IDLoutput_{startorb}-{startorb+100}.txt"
+                eln = this_orbfold + f"IDLerrors_{startorb}-{startorb+100}.txt" 
+
+                # Start the writer process
+                IDLwriter = ctx.Process(target=idl_writer,
+                                        args=(idl_cmd_q, 
+                                            ["stdbuf", "-oL", "-eL", "idl", "-quiet"], # IDL launch command
+                                            IDL_FOLD,
+                                            oln,
+                                            eln))   
+                IDLwriter.start()
+
+                # idlproc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script("", errlogname=eln)
+
+                idl_process_kwargs={"open_idl": False, 
+                                    #"proc": idlproc, 
+                                    # "stderr_queue": stderr_queue, 
+                                    # "stderr_thread": stderr_thread,
+                                    "cmd_queue": idl_cmd_q}
+            else:
+                print("File writeout not requested, IDL will not be opened")
+
+            # make a shared dict
+            resdict_thisorb = manager.dict({"OK": [], "no_light": [], 
+                                            "no_dark": [], "other": [], 
+                                            "other_log": []})
+            lock = manager.Lock() # safeguard the dict
+            
+
+            # PROCESS *ALL* THE FILES!!!!!
+            with ctx.Pool(processes=os.cpu_count()) as pool:
+                pool.starmap(obs_worker, 
+                            [(process_timestamp, obs, this_orbfold, ld_pairs, resdict_thisorb, \
+                              lock, idl_process_kwargs, clean_kwargs) 
+                            for obs in obs_to_process]
+                            )
+                idl_cmd_q.put(None)       # sentinel
+                pool.close()
+                pool.join() 
+            
+            # Once finished, end the queues for the logs and quit the writer 
+            if DO_WRITEOUT:
+                IDLwriter.join()
+
+            # Calculate problems that we had
+            total_probs = len(resdict_thisorb['no_light']) + \
+                        len(resdict_thisorb['no_dark']) + \
+                        len(resdict_thisorb['other'])
+            
+            # Set up the log file 
+            finish_time_str = datetime.datetime.now().strftime('%Y-%m-%d')
+            logfn = f"process_report_{startorb}-{startorb+100}_{finish_time_str}{reportext}.txt"
+            logpath = this_orbfold + logfn
+
+            # Log the results
+            with open(logpath, "w") as f:
+                f.write(f"SUCCESSFUL FILES: {len(resdict_thisorb['OK'])} / {len(obs_to_process)}\n")
+                f.write("==========================================================\n")
+                for o in resdict_thisorb['OK']:
+                    expected_path = this_orbfold + o['name'].replace('l1a', 'l1c').replace('v14', 'v15')
+                    print(f"Python is looking for {expected_path}")
+                    if Path(expected_path).is_file():
+                        f.write(f"OK: {o['name']}\n")
+                    else:
+                        resdict_thisorb['other'] = resdict_thisorb['other'] + [o]
+                        resdict_thisorb['other_log'] = resdict_thisorb['other_log'] \
+                            + ["Python was ok but I guess IDL writeout failed"]
         
-        # add to lists...
-        if result=="OK":
-            successful_obs.append(obsfile)
-        elif result=="Light not in the key":
-            not_in_dark_key.append(obsfile)
-        elif result=="No valid dark found":
-            no_dark.append(obsfile)
-        elif "error" in result:
-            problem_obs.append(obsfile)
-            exception_log.append(result)
+                f.write(f"\nPROBLEM FILES: {total_probs} / {len(obs_to_process)}\n")
+                f.write("==========================================================\n")
+                for o in resdict_thisorb['no_light']:
+                    f.write(f"{o['name']}: Not in the light/dark key\n")
+                for o in resdict_thisorb['no_dark']:
+                    f.write(f"{o['name']}: No valid dark found\n")
+                for (o,e) in zip(resdict_thisorb['other'], resdict_thisorb['other_log']):
+                    f.write(f"{o['name']}: {e}\n")
+                
+                f.write("\n\n")
 
-    # Log problems
-    if not os.path.exists(orbit_subfolder_path): # Just in case this folder is full of erroring files
-        os.mkdir(orbit_subfolder_path)
+            print(f"Finished {startorb}--{startorb+100}\n\n\n\n\n")
 
-    finish_time_str = datetime.datetime.now().strftime('%Y-%m-%d')
-    logfn = f"process_report_{startorb}-{startorb+100}_{finish_time_str}{report_append_text}.txt"
-    logpath = orbit_subfolder_path + logfn
+            # the idl error log is in the parent l1c folder, copy it into the proper subfolder.
+            # then blank it out
+            # os.system(f"cp '{eln}' '{this_orbfold + eln}'" )
+            # open(L1C_DIR+eln, 'w').close()
 
-    # Calculate total problems 
-    total_probs = len(problem_obs) + len(not_in_dark_key) + len(no_dark)
+            # Close IDL as it needs to get regularly reopened
+            # if DO_WRITEOUT:
+            #     idlproc.terminate()
 
-    with open(logpath, "w") as f:
-        f.write(f"SUCCESSFUL FILES: {len(successful_obs)} / {len(this_md)}\n")
-        f.write("==========================================================\n")
-        for o in successful_obs:
-            f.write(f"OK: {o['name']}\n")
-
-        f.write(f"\nPROBLEM FILES: {total_probs} / {len(this_md)}\n")
-        f.write("==========================================================\n")
-        for o in not_in_dark_key:
-            f.write(f"{o['name']}: Not in the light/dark key\n")
-        for (o,e) in zip(problem_obs, exception_log):
-            f.write(f"{o['name']}: {e}\n")
-        for o in no_dark:
-            f.write(f"{o['name']}: No valid dark found\n")
-        f.write("\n\n")
-
-
-    print(f"Finished {startorb}--{startorb+100}\n\n\n\n\n")
-
-    # the idl error log is in the parent l1c folder, copy it into the proper subfolder.
-    # then blank it out
-    os.system(f"cp '{L1C_DIR + eln}' '{orbit_subfolder_path + eln}'" )
-    open(L1C_DIR+eln, 'w').close()
-
-
-if DO_WRITEOUT:
-    idlproc.terminate()
+if __name__ == "__main__":
+    main()

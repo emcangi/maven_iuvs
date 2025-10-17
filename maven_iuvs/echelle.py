@@ -2293,8 +2293,11 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                  fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
                  spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
                  process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
-                 timing_log=None, open_idl=True, proc=None, 
-                 stderr_queue=None, stderr_thread=None):
+                 timing_log=None, open_idl=True, 
+                 # Use these arguments when muiltiprocessing is not employed.
+                 proc=None, stderr_queue=None, stderr_thread=None,
+                 # Use the following with multiprocessing only.
+                 cmd_queue=None):
     """
     Writes out result of model fitting to an l1c file via a call to IDL.
 
@@ -2314,8 +2317,11 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                    Contains model fit uncertainties for each integration in light_fits, in kR per nm.
     I_fit, H_fit, D_fit, IPH_fit bg_fit: arrays
                                          Total model and each component fits
-    bright_data_ph_per_s : array
-                           data values in photons/sec, needed to maintain continuity with earlier data products.
+    spec_kR_pernm, data_unc_kR_pernm : arrays
+                                       Spectra and data uncertainties in physical units
+    bright_data_ph_per_s_array : array
+                                 data values in photons/sec, needed to maintain 
+                                 continuity with earlier data products.
     idl_pipeline_folder : string
                           Location of the IDL pipeline code on the local computer 
     open_idl : bool
@@ -2333,6 +2339,14 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     ----------
     an l1c .fits.gz file, written out from IDL.
     """
+
+    # Check right away if we are doing multiprocessing or not.
+    if cmd_queue is None and not open_idl:
+        if proc is None or stderr_queue is None or stderr_thread is None:
+            raise Exception("Need to pass in:\n" \
+                            "\t1) proc (subprocess.Popen instance)\n"\
+                            "\t2) stderr_q (queue.Queue() object for queueing stderr output)\n" \
+                            "\t3) stderr_thread (threading.Thread() instance for reading from stderr_q)\n")
 
     n_int = get_n_int(light_fits)
 
@@ -2439,66 +2453,73 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
 
     # Now call IDL
-    if open_idl is True:
-        ta = time.time()
-        if timing_log is not None:
-            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening IDL\n")
-        proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
-        tb = time.time()
-        if timing_log is not None:
-            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished opening IDL and compiling script: {round(tb-ta, 2)} sec (tb-ta)\n")
-    else:
-        if (proc is None) or (stderr_queue is None) or (stderr_thread is None):
-            raise Exception("Please pass in the subprocess proc, stderr_queue, "
-                            "and stderr_thread")
-        proc = proc
-        stderr_queue = stderr_queue
-        stderr_thread = stderr_thread
-    tc = time.time()
-    output_log = l1c_savepath + "IDLoutput.txt"
-    stdout_queue = queue.Queue()
-    stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
-                                                                stdout_queue, 
-                                                                output_log), 
-                                                          daemon=True)
-    stdout_thread.start()
-    proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
+    if cmd_queue is None:
+        # Mostly used when processing just a few files and not running IDL at a higher level.
+        if open_idl is True:
+            ta = time.time()
+            if timing_log is not None:
+                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening IDL\n")
+            proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
+            tb = time.time()
+            if timing_log is not None:
+                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished opening IDL and compiling script: {round(tb-ta, 2)} sec (tb-ta)\n")
+            proc.terminate() 
+            return 
+        else:
+            # IDL has been opened at a higher level and the process passed in
+            tc = time.time()
+            output_log = l1c_savepath + "IDLoutput.txt"
+
+            # Create queue and thread to track the stdout
+            stdout_queue = queue.Queue()
+            stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
+                                                                        stdout_queue, 
+                                                                        output_log), 
+                                                                daemon=True)
+            stdout_thread.start()
+
+            # Send IDL write command
+            proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
+                            '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                            '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                            '{ph_per_s_csv_path}'\n")
+            proc.stdin.flush()
+            time.sleep(1)
+
+            # Check that files have been created 
+            target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+            target_l1c_fullpath = l1c_savepath + target_l1c_filename
+            target_fits = Path(target_l1c_fullpath)
+            target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
+            file_process_success = f"IDL finished {target_l1c_filename}"
+
+            if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
+                print(f"File and label writeout succeeded")
+                returnval = "IDL OK"
+            else:
+                print(f"Python detects that an error occurred in IDL")
+                returnval = "IDL error"
+
+            td = time.time()
+            if timing_log is not None:
+                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished with IDL writeout: {round(td-tc, 2)} sec (td-tc)\n")
+            
+            # Make sure stdout queue is clear between calls I think?
+            with stdout_queue.mutex:
+                stdout_queue.queue.clear()
+            
+            return returnval
+    # Multiprocessing usage
+    else: 
+        cmd_queue.put(f"write_l1c_file_from_python, '{light_l1a_path}', \
                      '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
                      '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                     '{ph_per_s_csv_path}'\n")
-
-    proc.stdin.flush()
-    time.sleep(1)
-    target = l1c_savepath + (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
-    target_fits = Path(target)
-    target_xml = Path(target[:-16] + ".xml")
-
-    file_process_success = "FINISHED! If you see this message in the IDL log or terminal when calling from Python, the IDL script succeeded"
-    if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success): #
-        print(f"File and label writeout succeeded")
-        returnval = "IDL OK"
-    else:
-        print(f"Python detects that an error occurred in IDL")
-        returnval = "IDL error"
-
-    td = time.time()
-    if timing_log is not None:
-        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished with IDL writeout: {round(td-tc, 2)} sec (td-tc)\n")
-    if open_idl is True:
-        proc.terminate() 
-
-    with stdout_queue.mutex:
-        stdout_queue.queue.clear()
-
-    # Delete the temp files once finished TODO: TEST!
-    Path.unlink(all_fits_csv_path)
-    Path.unlink(brightness_and_linectr_csv_path)
-    Path.unlink(ph_per_s_csv_path)
-
-    return returnval
+                     '{ph_per_s_csv_path}'\n", timeout=3)
+        return "IDL OK"
 
 
-def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt"):
+def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt",
+                                         start_stderr_q_and_thread=True):
     """
     Opens IDL with subprocess, and starts a thread to monitor the output to 
     check for when the script to writeout files in IDL has been compiled.
@@ -2856,20 +2877,20 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
 
     # Now call the fitting routine
+    # Scalers for some of the initial guess parameters, to be used by both 
+    # scipy and dynesty.
     a = -1.0
     b = 2.0
     
     if fitter == "scipy":
+        # for xtol and ftol, at most 1e-3 is required for happiness; 
+        # 1e-4 is default
         x_tol = 1e-5
         f_tol = 1e-8
         try:
             bestfit = sp.optimize.minimize(negloglikelihood_jit, pig,
                                            args=objfn_args,
                                            method=solver,
-                                           # for xtol and ftol, at least 1e-3 
-                                           # is required for happiness; 
-                                           # 1e-4 is default
-                                           
                                            options={"xtol": x_tol,  
                                                    "ftol": f_tol},
                                            bounds=[(pig[0]*a, pig[0]*b),  # DN_H
@@ -2979,8 +3000,6 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 u transformed into the appropriate space for each parameter.
 
             """
-            a = -1.0
-            b = 2.0
             param_bounds = [
                 [pig[0]*a, pig[0]*b],  # Total DN, H
                 [pig[1]*a, pig[1]*b],  # DN, D
@@ -3253,15 +3272,19 @@ def negloglikelihood(params, *args):
     """
     return -loglikelihood(params, *args)
 
+# Use CPU to avoid overloading graphics memory:
+jax_config.update('jax_platform_name', 'cpu')
+
 negloglikelihood_jit = jax.jit(negloglikelihood, static_argnums=[7])
 negloglikelihood_jacobian_jit = jax.jit(jax.jacobian(negloglikelihood, argnums=0), static_argnums=[7])
 negloglikelihood_hessian_jit = jax.jit(jax.hessian(negloglikelihood, argnums=0), static_argnums=[7])
 
 def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU_bg, fit_IPH_component):
     """
-    Retrieves the model of the lineshape to fit and the associated log likelihood, denoted 
-    L (assuming a Gaussian distributed quantity). L is defined as:
-    L = -Σ_i^N ((d_i - m_i)^2 / (2(σ_i)^2))     {{note the minus sign!}}
+    Retrieves the model of the lineshape to fit and the associated log likelihood, 
+    assuming a Gaussian distributed quantity with independent uncertainties).
+    L is defined as:
+    L = -(N/2)*ln(2π) -Σ_i^N (ln(σ_i)) -Σ_i^N ((d_i - m_i)^2 / (2(σ_i)^2))
    
     Thus, for a Gaussian quantity, L should be maximized, as it represents
     the maximum likelihood estimator (MLE).
@@ -3280,7 +3303,7 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
                       wavelength that will be fit; nm
     binedges : array
               array of bin edges for wavelengths, in nm.
-    CLSF : array (n, 2)
+    CLSF : array (N, 2)
            CLSF object based on the LSF of the instrument.
     data : array
            spectrum in DN that will be fit
@@ -3294,8 +3317,7 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
     Returns
     -----------
     L : float
-        A single value which represents either the log-likelihood (if negative)
-        or the fit "badness" if positive.
+        Log likelihood as defined above
     """
 
     # Now do the model 
