@@ -25,24 +25,9 @@ if project_dir in sys.path:
 
 import maven_iuvs as iuvs # look, idk why, but it breaks if this isn't here.
 from maven_iuvs.download import get_default_data_directory
-from maven_iuvs.echelle import get_dir_metadata, make_dark_index, \
-    find_files_with_geometry, downselect_data, convert_l1a_to_l1c, \
-    get_dark_from_keyfile
+from maven_iuvs.echelle import get_dir_metadata, find_files_with_geometry, \
+     downselect_data, convert_l1a_to_l1c, get_dark_from_keyfile
 from maven_iuvs.miscellaneous import orbit_folder
-
-# SET UP ======================================================================
-
-DO_WRITEOUT = True # If True, IDL will run.
-make_plots = False
-save_arrays = False
-fitter = "scipy" # "dynesty"
-binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
-                # Had to do this at one point due to an IDL problem.
-if binning=="nonlinear":
-    print("WARNING! Only running nonlinear files! Is that what you wanted?")
-reportext = ""  # Extra text to append to procesisng report filename
-overwrite = True
-idl_process_kwargs = {}
 
 # ARG PARSE 
 # =============================================================================
@@ -54,36 +39,11 @@ parser.add_argument('end_orb', type=int,
 
 args = parser.parse_args()
 
-print(f"Will work on orbits {args.start_orb}--{args.end_orb}")
-
-# STARTING VERSION AND FOLDER DECLARATION
-# =============================================================================
-v = "v14"
-which_l1a = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
-DO_FMR = True
-DO_DISK = False
-DO_LIMB = False
-DO_PERI = False
-DO_CLEANUP_TEST = False
-
-IUVS_FOLD = "/home/emc/Insync/OneDrive-CU/Research/IUVS/"
-IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
-# L1c base 
-IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
-L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Round3_scipy_parallel/"
-            # "l1c_ech_data/disk_survey_ls200-300/v15/" # for disk
-          # "l1c_ech_data/Limb_v15/" # for writing new files of record
-          # "l1c_ech_data/test_old_cleanup/v15/" # for testing outlier rejection effects
-          # "l1c_ech_data/susfile_fits/v15/" #  for limb
-
-keyname = "MASTER_LIGHT_DARK_KEY_v14.csv"
-          #input("Please type name of light/dark key to use with .csv: ")
-PF = "/home/emc/GITREPOS/maven_iuvs/maven_iuvs/ancillary/" + keyname
-
 # WORKER FUNCTIONS FOR PARALLELIZATION ========================================
 
 def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kwargs=None,
-                        idl_process_kwargs=None):
+                        idl_process_kwargs=None, make_plots=False, overwrite=False,
+                        save_arrays=False, fitter="dynesty", writeout=True):
     """
     Specific process for setting up and performing fits to frames within an 
     observation defined my obs_md. Keeps things tidy by returning at various 
@@ -143,7 +103,7 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kw
                                     make_plots=make_plots,
                                     clean_data_kwargs=clean_data_kwargs,                       
                                     plot_kwargs=plot_kwargs,
-                                    run_writeout=DO_WRITEOUT,
+                                    run_writeout=writeout,
                                     idl_process_kwargs=idl_process_kwargs,
                                     )
 
@@ -158,7 +118,9 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kw
         return f"Caught an error: {excep}"
 
 
-def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock, idl_process_kwargs, clean_data_kwargs):
+def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock, 
+               idl_process_kwargs, clean_data_kwargs, make_plots, overwrite, 
+               save_arrays, fitter, writeout):
     """
     Worker function for a particular file;
 
@@ -179,6 +141,8 @@ def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock, 
     None
     """
     result = process_observation(obs_md, orbfold, ldkey, process_timestamp,
+                                 make_plots=make_plots, overwrite=overwrite,
+                                 save_arrays=save_arrays, fitter=fitter, writeout=writeout,
                                  clean_data_kwargs=clean_data_kwargs,
                                  idl_process_kwargs=idl_process_kwargs)
 
@@ -306,86 +270,123 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
         outlog_thread.join(timeout=2)
         errlog_thread.join(timeout=2)
 
-# LOAD LIGHT/DARK PAIR CSV
-# =============================================================================
-print("Loading light/dark pair CSV")
-ld_pairs = pd.read_csv(PF, delimiter=",", header=0)
-if ld_pairs.empty:
-    raise KeyError("dataframe is empty for some reason")
 
-# LOAD INDICES
+# SET UP LOOP 
 # =============================================================================
-ech_l1a_idx = get_dir_metadata(get_default_data_directory(which_l1a[v]),
-                               geospatial=True)
-dark_idx = make_dark_index(ech_l1a_idx)
+def main():
 
-# Find geometry files
-lights_with_geom = find_files_with_geometry(ech_l1a_idx)
+    # SET UP ======================================================================
+    DO_WRITEOUT = True # If True, IDL will run.
+    make_plots = False
+    save_arrays = False
+    fitter = "scipy" # "dynesty"
+    binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
+                    # Had to do this at one point due to an IDL problem.
+    if binning=="nonlinear":
+        print("WARNING! Only running nonlinear files! Is that what you wanted?")
+    reportext = ""  # Extra text to append to procesisng report filename
+    overwrite = True
+    idl_process_kwargs = {}
 
-# SELECT DATA
-# =============================================================================
-if DO_FMR: 
+
+    # STARTING VERSION AND FOLDER DECLARATION
+    # =============================================================================
+    v = "v14"
+    which_l1a = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
+    # DO_FMR = True
+    # DO_DISK = False
+    # DO_LIMB = False
+    # DO_PERI = False
+    # DO_CLEANUP_TEST = False
+
+    IUVS_FOLD = "/home/emc/Insync/OneDrive-CU/Research/IUVS/"
+    IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
+    # L1c base 
+    IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
+    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Round3_scipy_parallel/"
+                # "l1c_ech_data/disk_survey_ls200-300/v15/" # for disk
+            # "l1c_ech_data/Limb_v15/" # for writing new files of record
+            # "l1c_ech_data/test_old_cleanup/v15/" # for testing outlier rejection effects
+            # "l1c_ech_data/susfile_fits/v15/" #  for limb
+
+    keyname = "MASTER_LIGHT_DARK_KEY_v14.csv"
+            #input("Please type name of light/dark key to use with .csv: ")
+    PF = "/home/emc/GITREPOS/maven_iuvs/maven_iuvs/ancillary/" + keyname
+
+    # LOAD LIGHT/DARK PAIR CSV
+    # =============================================================================
+    print("Loading light/dark pair CSV")
+    ld_pairs = pd.read_csv(PF, delimiter=",", header=0)
+    if ld_pairs.empty:
+        raise KeyError("dataframe is empty for some reason")
+
+    # LOAD INDICES
+    # =============================================================================
+    ech_l1a_idx = get_dir_metadata(get_default_data_directory(which_l1a[v]),
+                                geospatial=True)
+    # dark_idx = make_dark_index(ech_l1a_idx)
+
+    # Find geometry files
+    lights_with_geom = find_files_with_geometry(ech_l1a_idx)
+
+    # SELECT DATA
+    # =============================================================================
+    # if DO_FMR: 
     clean_kwargs = {}
     metadata_lists = []
     orbit_folders_to_run =  list(range(args.start_orb, args.end_orb, 100))
 
     for so in orbit_folders_to_run:
         metadata_lists.append(downselect_data(lights_with_geom,
-                                              light_dark="light",
-                                              binning=binning,
-                                              orbit=[so, so+99]
-                                             )
-                             )
+                                            light_dark="light",
+                                            binning=binning,
+                                            orbit=[so, so+99]
+                                            )
+                            )
         # Create the folder so we can open IDL 
         if not os.path.isdir(L1C_DIR + f'orbit{so:05}'):
             makeme = L1C_DIR + f'orbit{so:05}/'
             os.mkdir(makeme)
-elif DO_LIMB:
-    clean_kwargs = {}
-    limbdata_temp = downselect_data(lights_with_geom, light_dark="light", 
-                                    segment="limb", 
-                                    orbit=[7700, 8000])
-    all_metadata = [l for l in limbdata_temp if 'bintbl' not in l['binning']] 
-    # all_metadata = np.load(IUVS_FOLD + "notebooks/susfiles_v15.npy",
-    #                        allow_pickle=True).item()['ss']
-elif DO_DISK:
-    clean_kwargs = {}
-    # select randomly throughout mission, but using different segments:
-    # diskdata = downselect_data(ech_l1a_idx, light_dark="light",
-    #                            segment="disk", ls=[200, 300])
-    # print(len(diskdata))
-    # trimit = input("Trim down the disk data? (y/n)")
-    # if trimit=="y":
-    #     stepsz = int(input("Enter step size: "))
-    #     all_metadata = diskdata[::stepsz]
-    # all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
-    all_metadata = np.load(IUVS_FOLD + "notebooks/crossmission_diskdata.npy",
-                           allow_pickle=True)
-elif DO_PERI:
-    clean_kwargs = {}
-    peridata = downselect_data(ech_l1a_idx, light_dark="light", 
-                               segment="periapse", ls=[200, 300])
-    print(len(peridata))
-    trimit = input("Trim down the peri data? (y/n)")
-    if trimit=="y":
-        stepsz = int(input("Enter step size: "))
-        all_metadata = peridata[::stepsz]
-    all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
-elif DO_CLEANUP_TEST:
-    clean_kwargs = {"clean_method": "old"}
-    all_metadata = downselect_data(ech_l1a_idx, light_dark="light",
-                               segment="outlimb", 
-                               date=datetime.datetime(2020, 9, 26, 20, 45, 28),
-                               orbit=12430
-                               )
+    # elif DO_LIMB:
+    #     clean_kwargs = {}
+    #     limbdata_temp = downselect_data(lights_with_geom, light_dark="light", 
+    #                                     segment="limb", 
+    #                                     orbit=[7700, 8000])
+    #     all_metadata = [l for l in limbdata_temp if 'bintbl' not in l['binning']] 
+    #     # all_metadata = np.load(IUVS_FOLD + "notebooks/susfiles_v15.npy",
+    #     #                        allow_pickle=True).item()['ss']
+    # elif DO_DISK:
+    #     clean_kwargs = {}
+    #     # select randomly throughout mission, but using different segments:
+    #     # diskdata = downselect_data(ech_l1a_idx, light_dark="light",
+    #     #                            segment="disk", ls=[200, 300])
+    #     # print(len(diskdata))
+    #     # trimit = input("Trim down the disk data? (y/n)")
+    #     # if trimit=="y":
+    #     #     stepsz = int(input("Enter step size: "))
+    #     #     all_metadata = diskdata[::stepsz]
+    #     # all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
+    #     all_metadata = np.load(IUVS_FOLD + "notebooks/crossmission_diskdata.npy",
+    #                         allow_pickle=True)
+    # elif DO_PERI:
+    #     clean_kwargs = {}
+    #     peridata = downselect_data(ech_l1a_idx, light_dark="light", 
+    #                             segment="periapse", ls=[200, 300])
+    #     print(len(peridata))
+    #     trimit = input("Trim down the peri data? (y/n)")
+    #     if trimit=="y":
+    #         stepsz = int(input("Enter step size: "))
+    #         all_metadata = peridata[::stepsz]
+    #     all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
+    # elif DO_CLEANUP_TEST:
+    #     clean_kwargs = {"clean_method": "old"}
+    #     all_metadata = downselect_data(ech_l1a_idx, light_dark="light",
+    #                             segment="outlimb", 
+    #                             date=datetime.datetime(2020, 9, 26, 20, 45, 28),
+    #                             orbit=12430
+    #                             )
 
-print(f"Total files to process: {sum([len(m) for m in metadata_lists])}")
-
-
-# SET UP LOOP 
-# =====================================================================================================================================
-
-def main():
+    print(f"Total files to process: {sum([len(m) for m in metadata_lists])}")
 
     # get date time here because it's hard to do in IDL
     process_timestamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
@@ -444,7 +445,8 @@ def main():
                 pool.starmap(obs_worker, 
                             [(process_timestamp, obs, this_orbfold, ld_pairs, 
                               resdict_thisorb, lock, idl_process_kwargs, 
-                              clean_kwargs) 
+                              clean_kwargs, make_plots, overwrite, save_arrays,
+                              fitter, DO_WRITEOUT)
                             for obs in obs_to_process]
                             )
                 idl_cmd_q.put(None) # Tell the queue sentinel to quit
