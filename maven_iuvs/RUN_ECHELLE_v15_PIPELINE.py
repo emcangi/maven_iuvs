@@ -95,6 +95,8 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kw
         status = convert_l1a_to_l1c(lf, df, lfold+ln, dfold+dn,
                                     orbfold, 
                                     fitter=fitter,
+                                    livepts=50,
+                                    bound="multi",
                                     overwrite=overwrite,
                                     process_timestamp=process_timestamp,
                                     save_arrays=save_arrays,
@@ -279,7 +281,7 @@ def main():
     DO_WRITEOUT = True # If True, IDL will run.
     make_plots = False
     save_arrays = False
-    fitter = "scipy" # "dynesty"
+    fitter = "dynesty" # "dynesty"
     binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
                     # Had to do this at one point due to an IDL problem.
     if binning=="nonlinear":
@@ -303,7 +305,7 @@ def main():
     IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
     # L1c base 
     IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
-    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Round3_scipy_parallel/"
+    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Dynesty/"
                 # "l1c_ech_data/disk_survey_ls200-300/v15/" # for disk
             # "l1c_ech_data/Limb_v15/" # for writing new files of record
             # "l1c_ech_data/test_old_cleanup/v15/" # for testing outlier rejection effects
