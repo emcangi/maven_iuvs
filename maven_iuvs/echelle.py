@@ -3053,7 +3053,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 return nan_results(spec, pig)
 
         try:
-            dsampler.run_nested()
+            dsampler.run_nested(print_progress=False)
         except (ValueError, RuntimeError) as e:
             print("Warning: caught a ValueError exception, " \
                   "likely an unfittable spectrum. Recommend checking" \
@@ -3062,6 +3062,11 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
         # Continue on if all is ok
         dresults = dsampler.results
+        print("---------------------------------------------------------------")
+        print(f"{light_fits['primary'].header['filename']}")
+        dresults.summary()
+        print("---------------------------------------------------------------")
+        print()
 
         # Make some cool plots
         if make_dynesty_plots:
