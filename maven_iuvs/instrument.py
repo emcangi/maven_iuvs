@@ -51,11 +51,16 @@ detector."""
 
 ech_Lya_slit_start = 346  # Starting pixel of slit in echelle mode for H/D Ly alpha
 
+ech_best_H_pixel = 478 
+"""Best matching pixel in the spectral direction for the line center."""
+
 ech_best_MRH_pixel = 485 
 """The location of the row most-accurately representing the MRH altitudes 
 across the aperture center (to be used by all emissions)"""
 
 ech_Lya_slit_end = 535  # Ending pixel of slit in echelle mode for H/D Ly alpha
+
+ech_dH1215   = 0.00710    # resolution in Angstrom/pixel of binned spectral axis for LyA region
 
 ech_LSF_unit = 0.35540982 # LSF units: kR / ph / s
 

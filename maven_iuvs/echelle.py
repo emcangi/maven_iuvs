@@ -39,12 +39,14 @@ from dynesty import utils as dyfunc
 # maven stuff
 import maven_iuvs as iuvs
 from maven_iuvs.binning import get_bin_edges, pix_to_bin, get_binning_scheme, get_bin_pix_boundaries
-from maven_iuvs.constants import D_offset, IPH_wv_spread, IPH_minw, IPH_maxw
+from maven_iuvs.constants import D_offset, IPH_wv_spread, IPH_minw, IPH_maxw, \
+                                 Lya_lab
 from maven_iuvs.download import get_default_data_directory
 import maven_iuvs.graphics.echelle_graphics as echgr # Avoids circular import problem
 from maven_iuvs.instrument import ech_LSF_unit, convert_spectrum_DN_to_photoevents, \
                                    ech_Lya_slit_start, ech_Lya_slit_end, \
-                                   ran_DN_uncertainty, ech_best_MRH_pixel
+                                   ran_DN_uncertainty, ech_best_MRH_pixel, \
+                                   ech_dH1215, ech_best_H_pixel
 from maven_iuvs.miscellaneous import get_n_int, locate_missing_frames, \
     iuvs_orbno_from_fname, iuvs_filename_to_datetime, iuvs_segment_from_fname, \
     orbno_RE, fn_RE, fn_no_version_RE, orbit_folder, findDiff, \
@@ -2110,7 +2112,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
 
     # Wavelengths and binwidths (which typically don't change)
     # ==============================================================================================
-    wavelengths = get_wavelengths(light_fits) # TODO: No reason to not index this
+    wavelengths = get_wavelengths(light_fits)
 
     I_fit_array = np.zeros_like(spectrum)
     H_fit_array = np.zeros_like(spectrum)
@@ -3549,8 +3551,23 @@ def get_wavelengths(light_fits):
     wavelength array as defined in the light_fits file.
     """
 
-    # TODO: build in code that will account for the possible case where wavelengths shift per integration
-    return light_fits["Observation"].data["Wavelength"][0, 1, :] # int, slit row, wavelengths
+    # Construct wavelength array using the dispersion of the instrument.
+    Nwavelengths = light_fits['primary'].data.shape[2]
+    # get low spectral pixel
+    lopix, trans = get_bin_pix_boundaries(light_fits, "spectral")
+    spepixlo = lopix[np.where(trans == 1)[0][0]]
+    
+    # Get spectral pix/bin - usually 2, but don't assume
+    spebinw = light_fits['binning'].data['spebinwidth'][0]
+    spebint =  light_fits['binning'].data['spebintransmit'][0]
+    spebinwidth = spebinw[np.where(spebint == 1)]
+
+    # the following is basically the index of Ly alpha in the finished grid 
+    xH1215 = (ech_best_H_pixel - spepixlo)/spebinwidth  
+
+    A = np.arange(Nwavelengths)*ech_dH1215*2
+    B = (Lya_lab*10 - (xH1215*ech_dH1215*2))
+    return np.add(A, B) / 10 # Convert to nm
 
 
 def get_spectrum(data, light_fits, average=False, coadded=False, integration=None): 
