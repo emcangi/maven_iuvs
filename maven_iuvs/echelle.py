@@ -2178,7 +2178,6 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
 
         # Package used affects what was done. Get it right
         if kwargs['fitter']=='scipy':
-            # fit_params_dict['min_neg_LL'] = fit_params[-1]
             fit_params_dict['maxLL'] = fit_params[-1] * -1 
         elif kwargs['fitter']=='dynesty':
             fit_params_dict['maxLL'] = fit_params[-1]
