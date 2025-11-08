@@ -2566,11 +2566,14 @@ def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt
                             stderr=subprocess.PIPE,
                             text=True, bufsize=1)
     
-    stderr_queue = queue.Queue()
-    
-    # Start background readers
-    stderr_thread = threading.Thread(target=start_reader, args=(proc.stderr, stderr_queue, err_log), daemon=True)
-    stderr_thread.start()
+    if start_stderr_q_and_thread:
+        stderr_queue = queue.Queue()
+        
+        # Start background readers
+        stderr_thread = threading.Thread(target=start_reader, 
+                                         args=(proc.stderr, stderr_queue, err_log), 
+                                         daemon=True)
+        stderr_thread.start()
 
     proc.stdin.write(".com write_l1c_file_from_python.pro\n")
     proc.stdin.flush()
@@ -2591,6 +2594,7 @@ def start_reader(pipe, output_queue, log_file_path):
     Parameters
     ----------
     pipe : subprocess.pipe instance
+           Intended to accept the proc.stderr 
     output_queue : Queue() instance
                 keeps track of IDL output while also allowing it to be written out to a file
     log_file_path : string
@@ -2812,7 +2816,7 @@ def get_binning_df(calibration="new"):
 def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 fit_IPH_component=False, BU_bg=np.nan,
                 fitter="dynesty", solver="Powell",
-                approach="static", livepts=100, bound="single", bootstrap=0,
+                approach="static", livepts=50, bound="multi", bootstrap=0,
                 hush_warning=True, make_dynesty_plots=False):
     """
     Given an initial guess for fit parameters and observational data, this fits the model to the data 
@@ -3035,13 +3039,13 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
             return x
 
-
+        ndim = len(pig)
         if approach == "dynamic":
             try:
                 dsampler = d.DynamicNestedSampler(loglikelihood_jit, prior_transform,
-                                                  len(ptf_args[0]),
+                                                  ndim,
                                                   logl_args=objfn_args,
-                                                  ptform_args=ptf_args,
+                                                #   ptform_args=ptf_args,
                                                   bound=bound, 
                                                   nlive=livepts,
                                                   bootstrap=bootstrap
@@ -3051,9 +3055,9 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
         elif approach == "static":
             try: 
                 dsampler = d.NestedSampler(loglikelihood_jit, prior_transform,
-                                        len(ptf_args[0]),
+                                        ndim,
                                         logl_args=objfn_args,
-                                        ptform_args=ptf_args,
+                                        # ptform_args=ptf_args,
                                         nlive=livepts,
                                         bound=bound,
                                         bootstrap=bootstrap
