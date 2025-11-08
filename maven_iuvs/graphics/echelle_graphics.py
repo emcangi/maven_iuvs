@@ -1031,27 +1031,15 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
         if "failed_fit" in fit_params_for_printing:
             printme.append("Bad frame - no fit.")
         else:
-            N = len(data_wavelengths)
 
-            if "maxLL" in fit_params_for_printing or "min_neg_LL" in fit_params_for_printing: 
-            # If either scipy or dynest was run,
-                if "maxLL" in fit_params_for_printing:
-                    maxLL = fit_params_for_printing['maxLL']
-
-                if "min_neg_LL" in fit_params_for_printing:
-                    maxLL = -1 * fit_params_for_printing['min_neg_LL']
+            if "maxLL" in fit_params_for_printing:
+                maxLL = fit_params_for_printing['maxLL']
 
                 printme.append(r"max $\ln\mathcal{L}$: "+f"{round(maxLL)}")
-
-                # Compute chisquared
-                chisq = round(-2 * (maxLL + (N*np.log(2*math.pi)/2) + np.sum(np.log(data_unc))))
-                reduced_chisq = round(chisq / (N-len(fit_params_for_printing.keys()) -1 ), 2)
-                printme.append(r"$\chi^2$: "+f"{chisq}")
-                printme.append(r"$\tilde{\chi}^2$: "+f"{reduced_chisq}")
-
-            if "minchisq" in fit_params_for_printing: 
-                # Sometimes we plot IDL output, which reports min. chisq, which is secretly reduced chisq.
-                printme.append(r"$\tilde{\chi}^2$: " + f"{round(fit_params_for_printing['minchisq'], 2)}")
+                chisqrnd = round(fit_params_for_printing['minchisq'])
+                reduced_chisqrnd = round(fit_params_for_printing['reduced_chisq'], 2)
+                printme.append(r"$\chi^2$: "+f"{chisqrnd}")
+                printme.append(r"$\tilde{\chi}^2$: "+f"{reduced_chisqrnd}")
 
             # Now do the stuff that should always be there....
             printme.append(f"H: {round(fit_params_for_printing['total_brightness_H'], 2)} ± {round(fit_params_for_printing['unc_total_brightness_H'], 2)} "+

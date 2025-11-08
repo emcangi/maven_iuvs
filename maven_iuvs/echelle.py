@@ -54,6 +54,7 @@ from maven_iuvs.miscellaneous import get_n_int, locate_missing_frames, \
 from maven_iuvs.geometry import has_geometry_pvec, get_mean_mrh
 from maven_iuvs.pds import get_pds_dates
 from maven_iuvs.search import get_latest_files, find_files, dropxml
+from maven_iuvs.statistics import chisquared
 from maven_iuvs.integration import get_avg_pixel_count_rate
 from maven_iuvs.user_paths import l1a_dir, idl_pipeline_dir
 from maven_iuvs.spice import load_iuvs_spice
@@ -2177,9 +2178,21 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
 
         # Package used affects what was done. Get it right
         if kwargs['fitter']=='scipy':
-            fit_params_dict['min_neg_LL'] = fit_params[-1]
+            # fit_params_dict['min_neg_LL'] = fit_params[-1]
+            fit_params_dict['maxLL'] = fit_params[-1] * -1 
         elif kwargs['fitter']=='dynesty':
             fit_params_dict['maxLL'] = fit_params[-1]
+
+        # Compute chi squared
+        fit_params_dict['minchisq'] = chisquared(fit_params_dict['maxLL'], 
+                                                 data_unc[i, :],
+                                                 p=len(initial_guess), 
+                                                 reduced=False)
+        fit_params_dict['reduced_chisq'] = chisquared(fit_params_dict['maxLL'], 
+                                                        data_unc[i, :],
+                                                        p=len(initial_guess), 
+                                                        reduced=True)
+
         fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
        
         if i in bad_frames:
@@ -3335,7 +3348,8 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
 
     L = - (N/2)*jnp.log(2*math.pi) \
         - jnp.sum(jnp.log(uncertainty) \
-        + ((data - DN_fit)**2 / (2*(uncertainty**2))))
+                  + (  (data - DN_fit)**2 / (2*(uncertainty**2))  )
+                 )
     return L
 
 loglikelihood_jit = jax.jit(loglikelihood, static_argnums=[7])
