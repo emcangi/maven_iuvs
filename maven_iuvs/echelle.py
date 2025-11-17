@@ -87,6 +87,7 @@ def weekly_echelle_report(weeks_before_now_to_report, root_folder):
     weekly_report_datetime_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(weeks=weeks_before_now_to_report)
     weekly_report_idx = [fidx for fidx in idx if fidx['datetime'].replace(tzinfo=pytz.UTC) >= weekly_report_datetime_start]
     weekly_report_idx = sorted(weekly_report_idx, key=lambda i:i['datetime'])
+    # start and end orbits
     weekly_report_orbit_start = iuvs_orbno_from_fname(weekly_report_idx[0]['name'])
 
     weekly_report_idx = [fidx for fidx in idx if ('orbit' in fidx['name'] and iuvs_orbno_from_fname(fidx['name']) >= weekly_report_orbit_start)]
@@ -95,22 +96,24 @@ def weekly_echelle_report(weeks_before_now_to_report, root_folder):
     # extend one orbit earlier to search for appropriate darks
     weekly_report_dark_idx = [fidx for fidx in idx if ('orbit' in fidx['name'] and iuvs_orbno_from_fname(fidx['name']) >= weekly_report_orbit_start-1)]
     weekly_report_dark_idx = sorted(weekly_report_dark_idx, key=lambda i:i['datetime'])
-    
+
     # print weekly report text
     print(f'Echelle report for {datetime.datetime.now().isoformat()[:10]}')
     print('------------------------------------')
     print(f"  covering observations after {weekly_report_idx[0]['datetime'].isoformat()[:19].replace('T',' ')} UTC")
-    print(f"                              orbit {iuvs_orbno_from_fname(weekly_report_idx[0]['name'])}+\n")
-
+    print(f"                              orbit {weekly_report_orbit_start}+\n")
     latest_orbit_with_files = iuvs_orbno_from_fname(weekly_report_idx[-1]['name'])
     print(f"Data available through ------> orbit {latest_orbit_with_files} ({iuvs_filename_to_datetime(weekly_report_idx[-1]['name']).isoformat()[:10]})")
+
+    # Expected data - this function prints statements within it
+    report_orbits_with_observations(idx, weekly_report_orbit_start, latest_orbit_with_files)
 
     geom_files = find_files_with_geometry(weekly_report_idx)
     try:
         latest_orbit_with_geometry = iuvs_orbno_from_fname(geom_files[-1]['name'])
         print(f"Geometry available through --> orbit {latest_orbit_with_geometry} ({iuvs_filename_to_datetime(geom_files[-1]['name']).isoformat()[:10]})")
     except IndexError:
-        print(f"Geometry not available after orbit {iuvs_orbno_from_fname(weekly_report_idx[0]['name'])}. ")
+        print(f"Geometry not available after orbit {weekly_report_orbit_start}. ")
         geom_idx = [fidx for fidx in idx if fidx['geom'] == True]
         print(f"Most recent file with geometry: {iuvs_orbno_from_fname(geom_idx[-1]['name'])}")
 
@@ -204,6 +207,74 @@ def identify_rogue_observations(idx):
                 
         if no_issues:
             print('  No issues.')
+
+
+def report_orbits_with_observations(ech_idx, start_orbit, end_orbit):
+    """
+    Reports whether expected observations are present. Currently, this doesn't 
+    intelligently predict data based on spacecraft opts, it just expects data
+    on even orbits and not on odd orbits. TODO: Work with Dale to update this.
+
+    Parameters
+    ----------
+    ech_idx : list of dictionaries
+              observation metadata 
+    start_orbit : int
+                  First orbit in block to search
+    end_orbit : int
+                  Last orbit in block to search
+
+    Returns
+    ----------
+    None (print statements)
+    """
+
+    # Prune index to relevant files only
+    selected_l1a = iuvs.echelle.downselect_data(ech_idx, orbit=[start_orbit, end_orbit])
+    
+    # Create an expected range of orbit numbers from provided orbits
+    expected_orbits = np.arange(start_orbit, stop=end_orbit) 
+    # Get the even and odd orbits
+    expected_even = expected_orbits[np.where(expected_orbits % 2 == 0)]
+    expected_odd = expected_orbits[np.where(expected_orbits % 2 == 1)]
+    
+    # Collect files within this range 
+    actual_orbits = []
+    actual_segments = []
+    for entry in selected_l1a: 
+        actual_orbits.append(entry["orbit"])
+        actual_segments.append(entry['segment'])
+
+    orbits_unique = sorted(list(set(actual_orbits)))
+
+    # Search the files to see what orbits we truly have 
+    missing_odd = []
+    for o in expected_odd: 
+        if o in orbits_unique:
+            pass
+        else:
+            missing_odd.append(o)
+
+    odd_with_obs = sorted(list(set(expected_odd).difference(set(missing_odd))))
+
+    print(f"  ODD orbits with data: {' '.join(odd_with_obs)}")
+
+    if odd_with_obs:
+        for oddorb in odd_with_obs: 
+            i = actual_orbits.index(oddorb)
+            print(f"    Orbit {oddorb} -- segment {actual_segments[i]}")
+    
+    missing_even = []
+    for o in expected_even: 
+        if o in orbits_unique:
+            pass
+        else:
+            missing_even.append(o)
+
+    if not missing_even:
+        missing_even.append("None (all expected orbits supplied)")
+
+    print(f"  EVEN orbits without data: {' '.join([str(me) for me in missing_even])}")
 
 
 # HELPER METHODS ======================================================
