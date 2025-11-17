@@ -279,7 +279,7 @@ def report_orbits_with_observations(ech_idx, start_orbit, end_orbit):
 
 # HELPER METHODS ======================================================
 
-def downselect_data(index, light_dark=None, orbit=None, date=None, segment=None, lat=None, ls=None, int_time=None, binning=None):
+def downselect_data(index, channel="ech", light_dark=None, orbit=None, date=None, segment=None, lat=None, ls=None, int_time=None, binning=None):
     """
     Given the index of files, this will select only those files which 
     match the orbit number, segment, or date. 
@@ -288,6 +288,8 @@ def downselect_data(index, light_dark=None, orbit=None, date=None, segment=None,
     ----------
     index : list
             list of dictionaries of file metadata returned by get_file_metadata
+    channel : string
+              "ech", "muv", "fuv"
     light_dark : string
                  "light" or "dark"; downselects index to either light or dark observations.
     orbit : int or list
@@ -320,6 +322,9 @@ def downselect_data(index, light_dark=None, orbit=None, date=None, segment=None,
                Similar to index, list of dictionaries of file metadata.
     """
     selected = copy.deepcopy(index)
+
+    # Select channel
+    selected = [entry for entry in selected if channel in entry['name']]
 
     # Filter to lights or darks as specified 
     if light_dark=="light":
