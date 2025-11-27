@@ -3724,14 +3724,14 @@ def add_in_quadrature(uncertainties, light_fits, coadded=False, integration=None
     if coadded:
         if integration is not None:
             raise Warning("Integration will not be used since coadded=True")
-        total_uncert = np.sqrt( np.sum( (uncertainties[si1:si2+1, :])**2, axis=0) )
+        total_uncert = np.sqrt( np.nansum( (uncertainties[si1:si2+1, :])**2, axis=0) )
     else:
         if integration is None:
-            total_uncert = np.sqrt( np.sum( (uncertainties[:, si1:si2+1, :])**2, axis=1) )
+            total_uncert = np.sqrt( np.nansum( (uncertainties[:, si1:si2+1, :])**2, axis=1) )
         elif type(integration) is int:
             # Sum up the spectra over the range in which Ly alpha is visible on the slit (not outside it)
             # This spectrum is thus in DN
-            total_uncert = np.sqrt( np.sum( (uncertainties[integration, si1:si2+1, :])**2, axis=0) )
+            total_uncert = np.sqrt( np.nansum( (uncertainties[integration, si1:si2+1, :])**2, axis=0) )
 
     return total_uncert
 
