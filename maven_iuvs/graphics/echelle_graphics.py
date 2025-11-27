@@ -40,7 +40,7 @@ guideline_color = "xkcd:cool gray"
 # QUICKLOOK CODE =========================================================================================
 
 
-def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segment=None, start_k=0, savefolder=None, **kwargs):
+def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, segment=None, start_k=0, savefolder=None, **kwargs):
     """
     Runs quicklooks for the files in ech_l1a_idx, downselected by either date, orbit, or segment.
 
@@ -91,6 +91,7 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
     nonlinearfiles = []
     already_done = []
     unique_exceptions = []
+    files_missing_dark = []
 
     # Loop through the dictionary containing light and dark pairs and run the quicklook code on each set.
     ldkeys = list(lights_and_darks) 
@@ -98,13 +99,23 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
         k = ldkeys[ki]
         light_idx = lights_and_darks[k][0]
 
+        if v=="v13":
+            thedir = l1a_dir
+        else:
+            thedir = l1a_full_mission_reprocess_dir
+
         # open the light file --------------------------------------------------------------------
-        light_path = find_files(data_directory=l1a_dir,
+        light_path = find_files(data_directory=thedir,
                                 use_index=False, pattern=light_idx['name'])[0]
 
         # open the dark file ---------------------------------------------------------------------
-        dark_path = find_files(data_directory=l1a_dir,
-                               use_index=False, pattern=lights_and_darks[k][1]["name"])[0]
+        dark_path = find_files(data_directory=thedir,
+                               use_index=False, pattern=lights_and_darks[k][1]["name"])
+        
+        if dark_path:
+            dark_path = dark_path[0]
+        else:
+            dark_path = "No valid dark found"
 
         quicklook_status = ""
         try:
@@ -113,14 +124,17 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
             quicklook_status = e.args[0] #  Collect the actual message
             if kwargs["verbose"] is True:
                 raise(e)
-        finally:
+        finally:    
+            # Now keep track of what happened
             if quicklook_status == "File exists":
                 already_done.append(light_idx['name'])
             elif (quicklook_status=="Missing critical observation data: no valid lights"):
                 badfiles.append(light_idx['name'])
+            elif (quicklook_status=="No dark observation found"):
+                badfiles.append(light_idx['name'])
             elif (quicklook_status=="Missing critical observation data: no valid darks"): 
                 # This is different from files missing dark. Here, a dark file was found, but the frames are all bad.
-                badfiles.append(light_idx['name'])
+                files_missing_dark.append(light_idx['name'])
             elif (quicklook_status=="Keyword \'SPE_SIZE\' not found."):
                 nonlinearfiles.append(light_idx['name'])
             elif (quicklook_status == "Success"):
@@ -350,6 +364,10 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
           May also return an unhandled exception to allow for flexible error catching.
           If the status is "Success", the completed figure is also saved to savefolder.
     """
+
+    # If no dark, return immediately.
+    if dark_path == "No valid dark found":
+        return "No dark observation found"
     
     # Adjust font face
     mpl.rcParams["font.sans-serif"] = "Louis George Cafe"
