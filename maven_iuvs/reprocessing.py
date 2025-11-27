@@ -12,6 +12,8 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
     The fits files should be for the same observation, differing only in 
     version, so there should be no or minimal differences, other than fields
     like filename, etc. 
+
+    The newer product version should be fits2.
     
     Parameters
     ----------
@@ -40,11 +42,17 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
     new_hdus = list(set(f2_hdus).difference(set(f1_hdus)) )
 
     for hduname in new_hdus:
-        print(f"{hduname} HDU: New in {labels[1]} products.")
+        print(f"{hduname} HDU")
+        print("============================================")
+        print(f"This is a new HDU introduced in {labels[1]} products. Data fields:")
+        datanames = fits2[hduname].data.names
+        for n in datanames:
+            print(n)
         print()
     
     for hduname in common_hdus:
         if hduname != "PRIMARY": # The primary will usually be different between different versions.
+            print()
             print(f"{hduname} HDU")
             print("============================================")
             for n in fits1[hduname].data.names:
@@ -69,6 +77,7 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                     print()
                 elif n not in fits2[hduname].data.names:
                     print(f"Header {n} has no equivalent in {labels[1]} products.")
+                    print()
                 else:
                     # Compare arrays; different behavior for numbers vs. strings.
                     if fits1[hduname].data[n].dtype in [">f8", "float64", "int64"]:
@@ -102,6 +111,7 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                 if n not in fits1[hduname].data.names \
                         and (n!="BRIGHT_H_ONESIGMA_KR") \
                         and (n!="BRIGHT_D_ONESIGMA_KR"):
+                    print()
                     print("***************NEW***************")
                     print(f"{n} is new in {labels[1]} products:")
                     print(fits2[hduname].data[n])
