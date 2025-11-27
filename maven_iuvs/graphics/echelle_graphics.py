@@ -83,7 +83,7 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
     no_geometry = [i['name'] for i in find_files_missing_geometry(selected_l1a)]
 
     # TODO: fix bug if "verbose" flag is missing from call
-    lights_and_darks = pair_lights_and_darks(selected_l1a, dark_idx, verbose=kwargs["verbose"])
+    lights_and_darks = pair_lights_and_darks(selected_l1a, dark_idx, verbose=False)
 
     # Arrays to keep track of which files were processed, which were already done, and which had problems
     processed = []
@@ -742,7 +742,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
 # LINE FITTING PLOTS ========================================================
 def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, H_fit=None, D_fit=None, fit_IPH_component=None,
                    do_BU_background_comparison=False, print_fn_on_plot=True, plot_bg_separately=False, plot_subtract_bg=False, make_example_plot=False,
-                   BU_stuff=None, fig_savepath=None, restrict_x=True):
+                   BU_stuff=None, fig_savepath=None, restrict_x=True, figsz=(12,6), img_dpi=92, residax_ylim=None):
     """
     Given data and model information in physical units this makes some nice plots.
     Everything should be in physical units or you'll be sad.
@@ -804,7 +804,7 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
                       t=titletext, fn_for_subtitle=thefnonly, plot_bg=bg_fits[i, :], plot_subtract_bg=plot_subtract_bg,
                       plot_bg_separately=plot_bg_separately, fig_savepath=(fig_savepath + f"frame{i}" if fig_savepath is not None else None), restrict_x=restrict_x, 
                       fit_IPH_component=(True if len(fit_IPH_component)==1 else fit_IPH_component[i]), 
-                      guideline_lbl_y=0.05)
+                      guideline_lbl_y=0.05, residax_ylim=residax_ylim, figsz=figsz, img_dpi=img_dpi)
 
         if do_BU_background_comparison:
             fit_params_for_printing_BUbg = fit_params_BUbg[i] | fit_unc_BUbg[i]
@@ -866,7 +866,7 @@ def example_fit_plot(data_wavelengths, data_vals, data_unc, model_fit, bg=None, 
 def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printing, wavelength_bin_edges=None, data_unc=None, 
                   mainax=None, residax=None, t="Fit", fn_for_subtitle="", make_residual_axis=True, print_on_axes=True,
                   logview=False, plot_bg=None, plot_subtract_bg=True, plot_bg_separately=False, fig_savepath=None,
-                  img_dpi=92, extra_print_on_plot=None, restrict_x=True, residax_ylim=None, fit_IPH_component=True,
+                  img_dpi=92, extra_print_on_plot=None, restrict_x=True, figsz=(12,6), residax_ylim=None, fit_IPH_component=True,
                   guideline_lbl_y=0):
     """
     Plots the fit defined by data_vals to the data, data_wavelengths and data_vals.
@@ -917,7 +917,7 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
     new_ax = False
     if mainax is None:
         new_ax = True
-        fig = plt.figure(figsize=(12,6))
+        fig = plt.figure(figsize=figsz)
 
         mygrid = gs.GridSpec(4, 1, figure=fig, hspace=0.1)
         mainax = plt.subplot(mygrid.new_subplotspec((0, 0), colspan=1, rowspan=3)) 
@@ -1129,6 +1129,7 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
             os.makedirs(rootdir)
 
         plt.savefig(fig_savepath, dpi=img_dpi, bbox_inches="tight")
+        plt.close(fig)
     if new_ax:
         return fig
 
