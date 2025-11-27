@@ -29,7 +29,7 @@ from maven_iuvs.miscellaneous import iuvs_orbno_from_fname, \
     iuvs_segment_from_fname, get_n_int, iuvs_filename_to_datetime, orbno_RE, fn_noext_RE, fn_RE
 from maven_iuvs.search import find_files 
 from maven_iuvs.time import utc_to_sol
-from maven_iuvs.user_paths import l1a_dir
+from maven_iuvs.user_paths import l1a_dir, l1a_full_mission_reprocess_dir
 
 # COMMON COLORS ==========================================================================================
 model_color = "#1b9e77"
