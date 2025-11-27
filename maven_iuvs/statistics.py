@@ -30,6 +30,33 @@ def chisquared(LL, sigma, p=0, reduced=False):
     return chisq
 
 
+def chisquared_standard(m, d, sigma, p=0, reduced=False):
+    """
+    More typical computation of chi squared
+    Parameters
+    ----------
+        m : array
+            modeled values
+        d : array
+            data values
+        sigma : array
+                vector of data uncertainties for every bin
+        p : int
+            number of model parameters, used to compute reduced chisq
+        reduced : bool
+                  False > returns normal chi squared. True > returns reduced
+
+    Returns
+    ----------
+    chisq : float
+            chi squared value, normal or reduced.
+    """
+    N = len(sigma)
+
+    chisq = np.sum( (m-d)**2 / (sigma**2) ) 
+    if reduced:
+        return chisq * (1/(N-p))
+    return chisq
 
 
 def multiple_linear_regression(templates, spectrum, spectrum_error):
