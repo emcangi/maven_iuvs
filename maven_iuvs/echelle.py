@@ -1793,7 +1793,6 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                        return_each_line_fit=True, 
                        use_BU_bg=False,
                        do_BU_background_comparison=False, 
-                       timing_log=None,
                        run_writeout=True, overwrite=False, make_plots=True, 
                        idl_process_kwargs = {"open_idl": False, "proc": None, 
                                              "stderr_queue": None, 
@@ -1875,18 +1874,12 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     # ===============================================================================================
     ints_to_fit = {"first": 1}.get(ints_to_fit, get_n_int(light_fits))
 
-    if timing_log is not None:
-        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Start (t0)\n")
-    t0 = time.time()
     # Dark subtraction
     # =========================================================================
     dark_sub_data, _, i_bad = subtract_darks(light_fits, dark_fits)
     i_nanlights, i_badlights, i_lights_with_nandark, i_nandark = i_bad  # unpack indices of problematic frames
     i_badframes = list(set(i_nanlights + i_badlights + i_lights_with_nandark))
 
-    t1 = time.time()
-    if timing_log is not None:
-        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Dark subtraction: {round(t1-t0, 2)} seconds (t1) \n")
     # Artifact removal / outlier rejection
     # =========================================================================
 
@@ -1894,9 +1887,6 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         processed_data = clean_data(dark_sub_data, i_badlights, **clean_data_kwargs)
     else:
         processed_data = dark_sub_data
-    t2 = time.time()
-    if timing_log is not None:
-        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Artifact removal: {round(t2-t1, 2)} seconds (t2) \n")
 
     # Flatten the calibrated data (coadd in spatial dimension)
     # ===============================================================================================
@@ -1968,10 +1958,6 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     arrays_in_kR_pernm, fit_params_kR, fit_unc_kR = convert_to_physical_units(light_fits, arrays_in_DN, fit_params, fit_uncertainties)
 
-    t3 = time.time()
-    if timing_log is not None:
-        timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished flattening and fitting: {round(t3-t2, 2)} seconds (t3) \n")
-
     if save_arrays:
         header = ["Wavelengths (nm)", "Data", "Data unc", "Total model", "Background"]
 
@@ -2020,10 +2006,8 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                                   IPH_fit_kR_pernm, bgs_kR_pernm, 
                                   spec_kR_pernm, data_unc_kR_pernm,
                                   bright_data_ph_per_s, process_timestamp, 
-                                  timing_log=timing_log, **idl_process_kwargs)
-        t4 = time.time()
-        if timing_log is not None:
-            timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished writeout with IDL: {round(t4-t3, 2)} seconds (t4)\n")
+                                  **idl_process_kwargs)
+
         return IDL_status
 
     return None
@@ -2383,7 +2367,7 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                  fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
                  spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
                  process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
-                 timing_log=None, open_idl=True, 
+                 open_idl=True, 
                  # Use these arguments when muiltiprocessing is not employed.
                  proc=None, stderr_queue=None, stderr_thread=None,
                  # Use the following with multiprocessing only.
@@ -2546,18 +2530,11 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     if cmd_queue is None:
         # Mostly used when processing just a few files and not running IDL at a higher level.
         if open_idl is True:
-            ta = time.time()
-            if timing_log is not None:
-                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening IDL\n")
             proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
-            tb = time.time()
-            if timing_log is not None:
-                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished opening IDL and compiling script: {round(tb-ta, 2)} sec (tb-ta)\n")
             proc.terminate() 
-            return 
+            return
         else:
             # IDL has been opened at a higher level and the process passed in
-            tc = time.time()
             output_log = l1c_savepath + "IDLoutput.txt"
 
             # Create queue and thread to track the stdout
@@ -2590,10 +2567,6 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                 print(f"Python detects that an error occurred in IDL")
                 returnval = "IDL error"
 
-            td = time.time()
-            if timing_log is not None:
-                timing_log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Finished with IDL writeout: {round(td-tc, 2)} sec (td-tc)\n")
-            
             # Make sure stdout queue is clear between calls I think?
             with stdout_queue.mutex:
                 stdout_queue.queue.clear()
