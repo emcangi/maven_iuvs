@@ -2864,7 +2864,7 @@ def get_binning_df(calibration="new"):
 
 def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 fit_IPH_component=False, BU_bg=np.nan,
-                fitter="dynesty", solver="Powell",
+                fitter="dynesty", solver="Powell", verbose=False,
                 approach="static", livepts=50, bound="multi", bootstrap=0,
                 hush_warning=True, make_dynesty_plots=False):
     """
@@ -3127,11 +3127,12 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
         # Continue on if all is ok
         dresults = dsampler.results
-        print("---------------------------------------------------------------")
-        print(f"{light_fits['primary'].header['filename']}")
-        dresults.summary()
-        print("---------------------------------------------------------------")
-        print()
+        if verbose:
+            print("---------------------------------------------------------------")
+            print(f"{light_fits['primary'].header['filename']}")
+            dresults.summary()
+            print("---------------------------------------------------------------")
+            print()
 
         # Make some cool plots
         if make_dynesty_plots:
