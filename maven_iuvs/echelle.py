@@ -257,7 +257,7 @@ def report_orbits_with_observations(ech_idx, start_orbit, end_orbit):
 
     odd_with_obs = sorted(list(set(expected_odd).difference(set(missing_odd))))
 
-    print(f"  ODD orbits with data: {' '.join(odd_with_obs)}")
+    print(f"  ODD orbits with data: {' '.join([str(o) for o in odd_with_obs])}")
 
     if odd_with_obs:
         for oddorb in odd_with_obs: 
