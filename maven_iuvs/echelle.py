@@ -2938,9 +2938,10 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
     if not np.isnan(BU_bg).all():
         BU_bg_jnp = jnp.array(BU_bg)
     else: 
-        BU_bg_jnp = np.nan
+        BU_bg_jnp = jnp.nan
         
-    objfn_args = (jnp.array(wavelengths), jnp.array(edges), jnp.array(CLSF), jnp.array(spec), jnp.array(unc), BU_bg_jnp, fit_IPH_component)
+    objfn_args = (jnp.array(wavelengths), jnp.array(edges), jnp.array(CLSF),
+                  jnp.array(spec), jnp.array(unc), BU_bg_jnp, fit_IPH_component)
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
 
     # Now call the fitting routine
