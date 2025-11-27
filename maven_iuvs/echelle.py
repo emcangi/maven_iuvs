@@ -2502,11 +2502,13 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     # Make dataframe
     fits_n_spec_df = pd.DataFrame(data=interleaved,
                                   columns=[f"{lbl}, i={j}" for j in range(n_int) 
-                                           for lbl in ["total_model", "H_fit", 
-                                                        "D_fit", "IPH_fit", 
-                                                        "background", 
-                                                        "coadded_spectrum", 
-                                                        "unc_spectrum"]
+                                           for lbl in ["total_model", 
+                                                       "H_fit", 
+                                                       "D_fit", 
+                                                       "IPH_fit", 
+                                                       "background", 
+                                                       "coadded_spectrum", 
+                                                       "unc_spectrum"]
                                           ]
                                  )
     
