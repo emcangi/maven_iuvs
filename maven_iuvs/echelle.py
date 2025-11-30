@@ -2551,47 +2551,46 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
         # Mostly used when processing just a few files and not running IDL at a higher level.
         if open_idl is True:
             proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
-            proc.terminate() 
-            return
+
+        # IDL has been opened at a higher level and the process passed in
+        output_log = l1c_savepath + "IDLoutput.txt"
+
+        # Create queue and thread to track the stdout
+        stdout_queue = queue.Queue()
+        stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
+                                                                    stdout_queue, 
+                                                                    output_log), 
+                                                            daemon=True)
+        stdout_thread.start()
+
+        # Send IDL write command
+        proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
+                        '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                        '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                        '{ph_per_s_csv_path}'\n")
+        proc.stdin.flush()
+        time.sleep(1)
+
+        # Check that files have been created 
+        target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+        target_l1c_fullpath = l1c_savepath + target_l1c_filename
+        target_fits = Path(target_l1c_fullpath)
+        target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
+        file_process_success = f"IDL finished {target_l1c_filename}"
+
+        if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
+            print(f"File and label writeout succeeded")
+            returnval = "IDL OK"
         else:
-            # IDL has been opened at a higher level and the process passed in
-            output_log = l1c_savepath + "IDLoutput.txt"
+            print(f"Python detects that an error occurred in IDL")
+            returnval = "IDL error"
 
-            # Create queue and thread to track the stdout
-            stdout_queue = queue.Queue()
-            stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
-                                                                        stdout_queue, 
-                                                                        output_log), 
-                                                                daemon=True)
-            stdout_thread.start()
-
-            # Send IDL write command
-            proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                            '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
-                            '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                            '{ph_per_s_csv_path}'\n")
-            proc.stdin.flush()
-            time.sleep(1)
-
-            # Check that files have been created 
-            target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
-            target_l1c_fullpath = l1c_savepath + target_l1c_filename
-            target_fits = Path(target_l1c_fullpath)
-            target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
-            file_process_success = f"IDL finished {target_l1c_filename}"
-
-            if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
-                print(f"File and label writeout succeeded")
-                returnval = "IDL OK"
-            else:
-                print(f"Python detects that an error occurred in IDL")
-                returnval = "IDL error"
-
-            # Make sure stdout queue is clear between calls I think?
-            with stdout_queue.mutex:
-                stdout_queue.queue.clear()
-            
-            return returnval
+        # Make sure stdout queue is clear between calls I think?
+        with stdout_queue.mutex:
+            stdout_queue.queue.clear()
+        
+        return returnval
+    
     # Multiprocessing usage
     else: 
         cmd_queue.put(f"write_l1c_file_from_python, '{light_l1a_path}', \
