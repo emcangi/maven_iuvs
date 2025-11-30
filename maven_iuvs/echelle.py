@@ -2235,6 +2235,24 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         # Now make into dictionaries, excluding the max log likelihood since 
         # it's not included in the parameter names
         fit_params_dict = make_fit_param_dict(fit_params[:-1])
+        fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
+
+        # NEW: Handle a case where the algorithm finishes successfully but decides
+        # that the emission lines are outside the range of the detector. which
+        # of course is nonsense. For some example frames that will fail this 
+        # way without this new logic, see:
+        # mvn_iuv_l1a_outdisk-orbit02026-ech_20151014T174148, integration 4
+        # mvn_iuv_l1a_inlimb-orbit04512-ech_20170125T190652, integration 19
+        if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]+D_offset) \
+            or (fit_params_dict["central_wavelength_H"] >= wavelengths[-1]):
+            bad_frames.append(i)
+            fit_params_dict['total_brightness_D'] = np.nan
+            fit_unc_dict['unc_total_brightness_D'] = np.nan
+
+            if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]):
+                # fit_params_dict['central_wavelength_H'] = np.nan
+                fit_params_dict['total_brightness_H'] = np.nan
+                fit_unc_dict['unc_total_brightness_H'] = np.nan
 
         # Package used affects what was done. Get it right
         if kwargs['fitter']=='scipy':
@@ -2252,7 +2270,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
                                                         p=len(initial_guess), 
                                                         reduced=True)
 
-        fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
+        
        
         if i in bad_frames:
             fit_params_dict["failed_fit"] = True
