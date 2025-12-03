@@ -17,7 +17,7 @@ from maven_iuvs.constants import D_offset
 from maven_iuvs.instrument import ech_Lya_slit_start, ech_Lya_slit_end, convert_spectrum_DN_to_photoevents
 from maven_iuvs.echelle import make_dark_index, downselect_data, add_in_quadrature, background, \
     pair_lights_and_darks, coadd_lights, find_files_missing_geometry, get_dark_frames, \
-    subtract_darks, remove_cosmic_rays, remove_hot_pixels, fit_H_and_D, line_fit_initial_guess, \
+    subtract_darks, clean_data, fit_H_and_D, line_fit_initial_guess, \
     get_wavelengths, get_spectrum, load_lsf, CLSF_from_LSF, ran_DN_uncertainty, get_conversion_factors, \
     get_ech_slit_indices, make_fit_param_dict, check_whether_IPH_fittable, \
     convert_to_physical_units
@@ -404,13 +404,13 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     n_ints_dark = get_n_int(dark_fits)
 
     # Dark subtraction
-    dark_subtracted, n_good_frames, bad_inds =  subtract_darks(light_fits, dark_fits)
+    dark_subtracted, n_good_frames, bad_inds =  subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=False)
     nan_light_inds, bad_light_inds, light_frames_with_nan_dark, nan_dark_inds = bad_inds  # unpack indices of problematic frames
     all_bad_lights = list(set(nan_light_inds + bad_light_inds + light_frames_with_nan_dark))
     
     # Clean up the data
-    data = remove_cosmic_rays(dark_subtracted, std_or_mad="mad")
-    data = remove_hot_pixels(data, all_bad_lights)
+    data = clean_data(dark_subtracted, all_bad_lights, remove_rays=True, 
+                      remove_hotpix=True)
     
     # Calculate data uncertainties
     dn_unc = ran_DN_uncertainty(light_fits, data)
@@ -584,9 +584,6 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
             DetAxes[0].text(textLA, 0.4, "IPH not observable with this " \
                             "viewing geometry", transform=DetAxes[0].transAxes, 
                             fontsize=16+fontsizes[fs])
-            
-        DetAxes[0].text(textLA, 0.35, "WARNING: Coadded brightnesses should only be used to estimate an emission's presence.\nUncertainty may be unreliable or nan.",
-                        color="#777", va="top", transform=DetAxes[0].transAxes, fontsize=16+fontsizes['large'])
     else:
         DetAxes[0].text(textLA, 1, "Model fit to data failed, no fit reported", 
                         color="#777", va="top", transform=DetAxes[0].transAxes, fontsize=16+fontsizes[fs])
@@ -678,8 +675,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
         elif i in light_frames_with_nan_dark:
             ThumbAxes[i].text(0.1, 1.1, "Bad dark", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
-        this_frame = data[i, :, :]
-
+        this_frame = light_fits['primary'].data[i, :, :]
         detector_image(light_fits, this_frame, fig=QLfig, ax=ThumbAxes[i], scale="sqrt",
                        print_scale_type=False, show_colorbar=False, arange=arange, plot_full_extent=False,)
         # print the alt
@@ -688,7 +684,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
             thisalt = round(thisalt)
             ThumbAxes[i].text(0.1, -0.05, f"{thisalt} km", color=color_dict['darkgrey'], va="top", fontsize=9+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
-    ThumbAxes[0].text(0, 1.1, f"{n_good_frames} total light frames co-added (pre-dark subtraction frames shown below; listed altitude is mean minimum ray height altitude across spatial dimension on slit):", fontsize=22, transform=ThumbAxes[0].transAxes)
+    ThumbAxes[0].text(0, 1.1, f"{n_good_frames} total light frames co-added (raw frames shown below; listed altitude is mean minimum ray height altitude across spatial dimension on slit):", fontsize=22, transform=ThumbAxes[0].transAxes)
 
     # Explanatory text printing ----------------------------------------------------------------------------------
     utc_obj = iuvs_filename_to_datetime(light_fits['Primary'].header['filename'])
