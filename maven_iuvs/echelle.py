@@ -968,7 +968,7 @@ def coadd_lights(data, n_good):
     return coadded_lights / n_good
 
 
-def subtract_darks(light_fits, dark_fits):
+def subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True):
     """
     Given matching light and dark fits, subtracts off the darks from lights
     while also taking into account bad frames, whether due to presence of nan
@@ -982,6 +982,11 @@ def subtract_darks(light_fits, dark_fits):
     second_dark : arrays
                   associated dark frames, previously determined to be
                   correctly matched
+    set_bad_frames_to_nan : bool
+                            If True, any frames with a problem will be set to 
+                            all nans. True is the safest option to avoid fitting
+                            bad data. 
+                            Can be set to False for quicklook generation.
 
     Returns
     ----------
@@ -1110,8 +1115,12 @@ def subtract_darks(light_fits, dark_fits):
     else:
         dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - second_dark
 
-    # Set any light frames with problems to entirely nan. TODO: This may not be the best thing to do
-    dark_subtracted[i_bad, :, :] = np.nan
+    # Set any light frames with problems to entirely nan. 
+    # This ensures we won't fit bad data for the data product pipeline. However,
+    # It's a good idea to pass in set_bad_frames_to_all_nan = False for quicklook
+    # generation so we can inspect the data.
+    if set_bad_frames_to_nan:
+        dark_subtracted[i_bad, :, :] = np.nan
 
     # Throw an error if there are no acceptable light frames
     if np.isnan(dark_subtracted).all(): 
@@ -1876,7 +1885,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     # Dark subtraction
     # =========================================================================
-    dark_sub_data, _, i_bad = subtract_darks(light_fits, dark_fits)
+    dark_sub_data, _, i_bad = subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True)
     i_nanlights, i_badlights, i_lights_with_nandark, i_nandark = i_bad  # unpack indices of problematic frames
     i_badframes = list(set(i_nanlights + i_badlights + i_lights_with_nandark))
 
