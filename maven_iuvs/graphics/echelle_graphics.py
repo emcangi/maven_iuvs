@@ -462,7 +462,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
          # You would think we need to adjust Aeff in the conversions but we don't because we're basically using an average
 
         arrays_in_DN = [coadded_spec, coadded_unc_spec, I_fit, bg_fit]
-        arrays_in_kR_pernm, fit_params_kR, fit_unc_kR  = convert_to_physical_units(light_fits, arrays_in_DN, [fit_params_dict], [fit_unc_dict])
+        arrays_in_kR_pernm, fit_params_kR, fit_unc_kR  = convert_to_physical_units(light_fits, arrays_in_DN, [fit_params_dict], [fit_unc_dict], [0])
         spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bg_array_kR_pernm = arrays_in_kR_pernm
     except Exception as e:
         print(f"Couldn't fit: {e}")
@@ -736,7 +736,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
 
 
 # LINE FITTING PLOTS ========================================================
-def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, H_fit=None, D_fit=None, fit_IPH_component=None,
+def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, ints_to_plot, H_fit=None, D_fit=None, fit_IPH_component=None,
                    do_BU_background_comparison=False, print_fn_on_plot=True, plot_bg_separately=False, plot_subtract_bg=False, make_example_plot=False,
                    BU_stuff=None, fig_savepath=None, restrict_x=True, figsz=(12,6), img_dpi=92, residax_ylim=None):
     """
@@ -755,6 +755,8 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
                  Contains model fit parameters for each integration in light_fits, in kR per nm.
     fit_unc : list of dictionaries
               Contains model fit uncertainties for each integration in light_fits, in kR per nm.
+    ints_to_plot : list
+                   list of integrations to make plots for. 
     H_fit :  array
              Individual line fit for H; should be supplied if make_example_plot is true
     D_fit : array
@@ -784,8 +786,8 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
     if do_BU_background_comparison:
         spec_BUbg, data_unc_BUbg, I_fit_BUbg, bg_array_BUbg, fit_params_BUbg, fit_unc_BUbg = BU_stuff
 
-    for (i, fp) in enumerate(fit_params):
-        fit_params_for_printing = fp | fit_unc[i] # Merge the parameter dictionaries
+    for i in ints_to_plot:
+        fit_params_for_printing = fit_params[i] | fit_unc[i] # Merge the parameter dictionaries
 
         # Plot fit
         # ============================================================================================

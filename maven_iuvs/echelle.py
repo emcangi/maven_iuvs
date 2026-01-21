@@ -1835,10 +1835,11 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     calibration : string
                   "new" or "old": whether to compare use new or old calibration values 
                   for the LSF and binning.
-    ints_to_fit : string
-                  Number of integrations to run the fit for.
-                  "first" will do the fit on the 0th frame (useful for testing).
-                  Any other value will just automatically fit all frames.
+    ints_to_fit : int, string, or list
+                  Integrations to perform the fit on. 
+                  int --> will pick a specific integration by index in file.
+                  list --> must be a specific list of integrations in file
+                  "all" --> will do the whole file
     remove_artifacts : bool
                        Whether to do the data cleanup routines.
     save_arrays : bool
@@ -1881,7 +1882,17 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         
     # Set number of integration frames to fit 
     # ===============================================================================================
-    ints_to_fit = {"first": 1}.get(ints_to_fit, get_n_int(light_fits))
+    if isinstance(ints_to_fit, int):
+        ints_to_fit =[ints_to_fit]
+    if isinstance(ints_to_fit, list):
+        if not all(isinstance(i, int) for i in ints_to_fit):
+            raise TypeError("ints_to_fit must either be an integer or a list of integers")
+    elif ints_to_fit=="all":
+        ints_to_fit = range(0, get_n_int(light_fits))
+    elif ints_to_fit=="None":
+        raise Exception("Damn it Jim, I'm a data pipeline not a philosopher")
+    else:
+        ints_to_fit = range(0, get_n_int(light_fits))
 
     # Dark subtraction
     # =========================================================================
@@ -1925,7 +1936,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         # Convert to physical units...
         arrays_in_DN_BUbg = [spectrum, data_unc, I_fit_BUbg, backgrounds_BU]
         arrays_in_kR_pernm_BUbg, fit_params_BUbg_kR, fit_uncertainties_BUbg_kR = convert_to_physical_units(light_fits, arrays_in_DN_BUbg, fit_params_BUbg, 
-                                                                                                           fit_uncertainties_BUbg)
+                                                                                                           fit_uncertainties_BUbg, ints_to_fit)
 
         # Put these arrays in a list for sending to the plot call
         packed_vals = [*arrays_in_kR_pernm_BUbg, fit_params_BUbg_kR, fit_uncertainties_BUbg_kR]
@@ -1952,10 +1963,10 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     if use_BU_bg:
         bg_fits = precalc_bg
     else:
-        bg_fits = make_array_of_fitted_backgrounds(light_fits, fit_params)
+        bg_fits = make_array_of_fitted_backgrounds(light_fits, fit_params, ints_to_fit)
 
     # Compute the brightness data in "photons per s" which has historically been stored in l1cs so we have to do it too
-    bright_data_ph_per_s = compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits)
+    bright_data_ph_per_s = compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, ints_to_fit)
 
     # Convert to physical units
     arrays_in_DN = [spectrum, data_unc, I_fit, bg_fits]
@@ -1965,13 +1976,13 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         arrays_in_DN.append(D_fit)
         arrays_in_DN.append(IPH_fit)
 
-    arrays_in_kR_pernm, fit_params_kR, fit_unc_kR = convert_to_physical_units(light_fits, arrays_in_DN, fit_params, fit_uncertainties)
+    arrays_in_kR_pernm, fit_params_kR, fit_unc_kR = convert_to_physical_units(light_fits, arrays_in_DN, fit_params, fit_uncertainties, ints_to_fit)
 
     if save_arrays:
         header = ["Wavelengths (nm)", "Data", "Data unc", "Total model", "Background"]
 
         # Stack vectors as columns
-        for i in range(spectrum.shape[0]):
+        for i in ints_to_fit:
             data = np.column_stack((get_wavelengths(light_fits), 
                                     arrays_in_kR_pernm[0][i, :],  # spectra
                                     arrays_in_kR_pernm[1][i, :],  # data uncertainties
@@ -1994,7 +2005,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         H_fit_for_plot = arrays_in_kR_pernm[-2] if return_each_line_fit else None
         D_fit_for_plot = arrays_in_kR_pernm[-1] if return_each_line_fit else None
 
-        echgr.make_fit_plots(light_l1a_path, get_wavelengths(light_fits), arrays_in_kR_pernm[:4], fit_params_kR, fit_unc_kR,
+        echgr.make_fit_plots(light_l1a_path, get_wavelengths(light_fits), arrays_in_kR_pernm[:4], fit_params_kR, fit_unc_kR, ints_to_fit,
                              H_fit=H_fit_for_plot, D_fit=D_fit_for_plot, fit_IPH_component=np.logical_not(np.all(np.isnan(IPH_fit), axis=1)),
                              do_BU_background_comparison=do_BU_background_comparison, BU_stuff=packed_vals, **plot_kwargs)
 
@@ -2126,7 +2137,7 @@ _fit_parameter_non_background_idxs = np.setdiff1d(range(0, len(_fit_parameter_na
 
 
 def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
-                  calibration="new", return_each_line_fit=True, ints_to_fit=1,
+                  calibration="new", return_each_line_fit=True, ints_to_fit="all",
                   BU_bg=np.nan, **kwargs):
     """
     Parameters
@@ -2147,8 +2158,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
                            Whether to return the parts of the model fit specific to H and D--useful for
                            making certain plots.
     ints_to_fit : int
-                  Number of frames on which to do the fitting. By default, only the first frame will be fit
-                  (mostly because we can't include the variable get_n_int(light_fits) as an argument).   
+                  Number of frames on which to do the fitting. default = "all"   
     BU_bg : array
             If included, this ad-hoc background will be used in the model instead of a fitted background.
     **kwargs : kwargs
@@ -2197,8 +2207,25 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
     # Get the mean MRH across integrations for finding if IPH is fittable
     mean_mrh = get_mean_mrh(light_fits)
 
+    # This shouldn't ever occur, but just in case. 
+    # Enclosing function should usually handle this
+    if ints_to_fit == "all":
+        ints_to_fit = [i for i in range(get_n_int(light_fits))]
+    elif isinstance(ints_to_fit, int):
+        ints_to_fit = [ints_to_fit]
+
     # Loop over integrations to do the fits
-    for i in range(0, ints_to_fit):
+    for i in range(0, get_n_int(light_fits)):
+
+        if i not in ints_to_fit:
+            # If we don't want to fit this integration, fill in nonsense for the 
+            # fit_params_dicts and fit_unc_dicts, but then move on. Doing it this
+            # way enables us to use the integrations asked for as an iterable over 
+            # these lists in higher level functions.
+            fit_params_dicts.append("Skipped")
+            fit_unc_dicts.append("Skipped")
+            continue
+
         # PERFORM FIT
         # ============================================================================================
         # Through experimentation, we found that the best solvers to use are in descending order: 
@@ -2359,7 +2386,7 @@ def make_fit_param_dict(thelist, is_fitparams=True):
     return param_dict
 
 
-def make_array_of_fitted_backgrounds(light_fits, fit_params):
+def make_array_of_fitted_backgrounds(light_fits, fit_params, fitted_integrations):
     """
     The fitting algorithms return best fits for the parameters of the background model, so to turn them 
     into actual arrays similar to the spectrum array, we have to call the function that constructs them
@@ -2372,6 +2399,8 @@ def make_array_of_fitted_backgrounds(light_fits, fit_params):
     fit_params : dictionary
                  Contains the best-fit parameters for the lineshape model fit to flattened spectra
                  in light_fits. 
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
 
     Returns
     ----------
@@ -2382,7 +2411,7 @@ def make_array_of_fitted_backgrounds(light_fits, fit_params):
     wavelengths = get_wavelengths(light_fits)
     bg_fits = np.ndarray((n_integrations, len(wavelengths))) # check this
     
-    for i in range(len(fit_params)):
+    for i in fitted_integrations:
         bg_fits[i, :] = background(wavelengths, fit_params[i]['central_wavelength_H'], fit_params[i]['background_b'], fit_params[i]['background_m'], fit_params[i]['background_m2'])  #, fit_params[i]['background_m3'])
 
     return bg_fits
@@ -2727,7 +2756,7 @@ def check_for_success_msg(output_queue, target_phrase, timeout=10):
             return True
         
 
-def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits):
+def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, fitted_integrations):
     """
     The echelle l1c files typically report a quantity referred to in IDL pipeline as bright_data_ph_per_s, 
     e.g. photoevents per second. This function computes this value so that it can continue to be reported.
@@ -2743,6 +2772,8 @@ def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits):
                  in light_fits. 
     bg_fits : array, shape (n_ints, n_wavelengths)
               Each row is the fitted background for a particular spectrum. Output from make_array_of_fitted_backgrounds.
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
     Returns
     ----------
     bright_data_ph_per_s : array, shape (n_ints, n_wavelengths)
@@ -2757,7 +2788,7 @@ def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits):
     spec_ph_s = convert_spectrum_DN_to_photoevents(light_fits, spectrum) / (t_int)
     background_array_ph_s = convert_spectrum_DN_to_photoevents(light_fits, bg_fits) / (t_int)
 
-    for i in range(len(fit_params)):
+    for i in fitted_integrations:
         # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
         popt, pcov = sp.optimize.curve_fit(background, wavelengths, background_array_ph_s[i, :],
                                            p0=[121.567, 0, 0, 0],  # , 0],
@@ -2770,7 +2801,8 @@ def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits):
 
 # Conversion functions ========================================================
 
-def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_params, fit_uncertainties, calibration="new"): 
+def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_params, fit_uncertainties, 
+                              fitted_integrations, calibration="new"): 
     """
     Given model fitting output, this converts it to physical units.
 
@@ -2784,6 +2816,8 @@ def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_par
                  Each dictionary contains the best-fit parameters for the lineshape model fit to flattened spectra in light_fits. 
     fit_uncertainties : list
                         the fit uncertainties on the parameters in fit_params. 
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
     calibration : string
                   "new" or "old": controls the conversion factors, as these differ in the original IDL pipeline
     
@@ -2812,7 +2846,7 @@ def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_par
     fit_params_converted = copy.deepcopy(fit_params)
     fit_unc_converted = copy.deepcopy(fit_uncertainties)
     
-    for i in range(len(fit_params)):  # Because it's now a list of dicts
+    for i in fitted_integrations:  # Because it's now a list of dicts
         fit_params_converted[i]['total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_H']) * conv_to_kR # H brightness
         fit_params_converted[i]['total_brightness_D'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_D']) * conv_to_kR # D brightness
         fit_unc_converted[i]['unc_total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_H']) * conv_to_kR
