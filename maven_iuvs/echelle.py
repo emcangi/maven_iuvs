@@ -3964,16 +3964,11 @@ def remove_hot_pixels(data, all_bad_lights=None, Wdt=3, Ns=3):
 
     window_edge = 2*Wdt + 1
 
-    # Figure out which frames are nans out of the bad frames - it may not be all
-    if all_bad_lights is not None:
-        nanframes = []
-        for f in all_bad_lights:
-            if np.isnan(data[f, :, :]).any():
-                nanframes.append(f)
-
-    no_hotp = np.nan_to_num(x=data).astype(int, copy=False)
+    # Get the exact indices where nans appear so we can replace them later
+    naninds = np.where(np.isnan(data))
 
     # Transform to integers, required by scikit-image.
+    no_hotp = np.nan_to_num(x=data).astype(int, copy=False)
     data = np.nan_to_num(x=data).astype("int")
     
     # here we are looking for the hot pixels. we find these by seeing if any pixels are anomalously larger than nearby px.
@@ -4012,10 +4007,9 @@ def remove_hot_pixels(data, all_bad_lights=None, Wdt=3, Ns=3):
         if len(coord)>0:
             no_hotp[f, hoti, hotj] = Fmed[hoti, hotj]
 
-    # Now reset the nan frames to nan
+    # Now reset the nan indices to nan instead of zero
     no_hotp = no_hotp.astype(float)
-    if all_bad_lights is not None:
-        no_hotp[nanframes, :, :] = np.nan
+    no_hotp[naninds] = np.nan
 
     return no_hotp
 
