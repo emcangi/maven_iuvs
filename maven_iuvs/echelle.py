@@ -2265,8 +2265,8 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         if i in bad_frames:
             # If the frame is bad, we must manually provide some values so the 
             # plots will still run if plots have been asked for.
-            fit_params = [0 for i in fit_params]
-            fit_1sigma = [0 for i in fit_1sigma]
+            fit_params = [0 for j in fit_params]
+            fit_1sigma = [0 for j in fit_1sigma]
 
         # Now make into dictionaries, excluding the max log likelihood since 
         # it's not included in the parameter names
