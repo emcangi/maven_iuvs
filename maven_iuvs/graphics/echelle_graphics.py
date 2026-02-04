@@ -705,7 +705,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
         thisalt = np.nanmean(light_fits['PixelGeometry'].data['PIXEL_CORNER_MRH_ALT'][i, get_ech_slit_indices(light_fits)[0]:get_ech_slit_indices(light_fits)[1]+1, -1])
         if not np.isnan(thisalt):
             thisalt = round(thisalt)
-            ThumbAxes[i].text(0.1, -0.05, f"{thisalt} km", color=color_dict['darkgrey'], va="top", fontsize=9+fontsizes[fs], transform=ThumbAxes[i].transAxes)
+            ThumbAxes[i].text(0.99, 1.1, f"{thisalt} km", color=color_dict['darkgrey'], va="top", ha="right", fontsize=9+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
     ThumbAxes[0].text(0, 1.1, f"{n_ints} total light frames co-added (raw frames shown below; listed altitude is mean minimum ray height altitude across spatial dimension on slit):", fontsize=22, transform=ThumbAxes[0].transAxes)
 
