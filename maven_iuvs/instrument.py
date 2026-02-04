@@ -320,7 +320,7 @@ def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
     # This is spe_size * spa_size, pixels per bin in spatial x spectral space.
 
     if ~(np.diff(npix_eachbin) == 0).all():
-        raise ValueError("Some problem with the binning scheme. Unhandled nonlinearly binned file?")
+        raise ValueError("Some unhandled problem with the binning scheme?")
 
     npix_perbin = npix_eachbin[0, 0]  # Assuming everything is k, we can do this
 
