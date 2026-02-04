@@ -64,7 +64,6 @@ import spiceypy as chilisnake
 
 # WEEKLY REPORT CODE ==================================================
 
-
 def weekly_echelle_report(weeks_before_now_to_report, root_folder):
     """
     Run the weekly echelle report.
@@ -277,9 +276,11 @@ def report_orbits_with_observations(ech_idx, start_orbit, end_orbit):
     print(f"  EVEN orbits without data: {' '.join([str(me) for me in missing_even])}")
 
 
-# HELPER METHODS ======================================================
+# BASIC FILE HANDLING / LIGHTS AND DARKS ======================================
 
-def downselect_data(index, channel="ech", light_dark=None, orbit=None, date=None, segment=None, lat=None, ls=None, int_time=None, binning=None):
+def downselect_data(index, channel="ech", light_dark=None, orbit=None, 
+                    date=None, segment=None, lat=None, ls=None, 
+                    int_time=None, binning=None):
     """
     Given the index of files, this will select only those files which 
     match the orbit number, segment, or date. 
@@ -901,6 +902,8 @@ def sort_ldkey_by_date(pair_df):
     return pair_df_timesorted
 
 
+# Work directly with light and dark files -------------------------------------
+
 def get_dark_path(light_l1a_path, idx, drkidx, return_sep=False):
     """
     Given the filepath for a light observation, will find and return the appropriate dark
@@ -952,263 +955,6 @@ def get_dark_path(light_l1a_path, idx, drkidx, return_sep=False):
             return [None, None]
         else:
             return None
-
-
-def coadd_lights(data, n_good):
-    """
-    Co-add all light frames within light_fits, including subtraction
-    of dark frames in dark_fits.
-
-    Parameters
-    ----------
-    data : array
-           detector image data, size (frames, spatial, wavelength)
-    n_good : int
-             number of valid frames of data used, calculated by subtract_darks.
-
-    Returns
-    ----------
-    coadded_lights : array
-                     Essentially the mean-frame of the detector
-    """
-    
-    # Do the co-adding
-    coadded_lights = np.nansum(data, axis=0)
-
-    # return everything necessary; this basically returns an average frame (because it divides by total frames used).
-    return coadded_lights / n_good
-
-
-def find_bad_light_frames(light_fits, bad_darks):
-    """
-    Identifies the integration numbers of light frames that aren't usable. The
-    types of unusable light frames (and keys in the returned dictionary) are
-    1) "nan": The frame has some nans, or all nans.
-    2) "broken": The frame is probably saturated (has a high median).
-    3) "bad_dark": The associated dark frame is bad, so we can't process the 
-                   light frame even if the light frame has valid data.
-    4) "corrupt": The data seem good, but were taken with commanding errors;
-                  there might be MUV contamination, a visible keyhole, or both.
-
-    Parameters
-    ----------    
-    light_fits : astropy.io.fits HDU instance
-                 A single light observation file
-    bad_darks : list
-                List of bad dark indices in ascending order, so,
-                typically one of: [0], [0, 1], [1]. 
-
-    Returns
-    ----------
-    all_bad_lights : list
-                     Integration numbers of light frames in light_fits that aren't
-                     usable.
-    (unnamed dict) : Dict
-                     Each key is shorthand for a problem with the light integrations
-                     listed in the value. 
-    
-    """
-
-    # Lists to keep track of everything
-    nan_light_inds = [] # frames with NaN
-    bad_light_inds = [] # Oversaturated or broken
-    lights_with_bad_darks = []
-    all_bad_lights = []
-
-    n_int = get_n_int(light_fits)
-
-    # Find medians of all frames
-    frame_medians = [np.nanmedian(light_fits['primary'].data[f, :, :]) for f in range(n_int)]
-
-    # Associated dark index
-    assoc_dark = [0] + [1] * (n_int-1)
-
-    for i in range(n_int):
-
-        # Frames with any nans
-        if np.isnan(light_fits['primary'].data[i, :, :]).any():
-            nan_light_inds.append(i)
-            continue
-        
-        # Frames with outlier median values, indicating saturation or weirdness
-        if (frame_medians[i] > 3*np.nanmedian(frame_medians)):
-            bad_light_inds.append(i)
-            continue
-
-        # Check if their dark frame is bad
-        if assoc_dark[i] in bad_darks:
-            lights_with_bad_darks.append(i)
-            continue
-    
-    # Finally, check for corrupt frames
-    corrupt_frames = get_corrupt_frames(light_fits)
-
-    all_bad_lights = sorted(list(set([*nan_light_inds, *bad_light_inds,
-                                      *lights_with_bad_darks, *corrupt_frames])))
-
-    return all_bad_lights, {"nan": nan_light_inds, 
-                            "broken": bad_light_inds, 
-                            "bad_dark": lights_with_bad_darks, 
-                            "corrupt": corrupt_frames}
-
-
-def find_bad_dark_frames(dark_frames, hard_failure=True):
-    """
-    Determines whether the dark frames provided are good or bad. That's it.
-
-    Parameters
-    ----------
-    dark_frames : 3D numpy ndarray
-                  Two dark frames, as returned by get_dark_frames().
-    hard_failure : boolean
-                   if True, will throw an exception if both darks are bad.
-                   If not, it won't. (Set to False to allow a quicklook to be 
-                   generated anyway)
-
-    Returns
-    ----------
-    bad_darks : list
-                Integration numbers of any unusable dark frames
-
-    """
-
-    n_darks = np.shape(dark_frames)[0]
-    bad_darks = []
-
-    # Get all the medians of the darks so we can compare each frame
-    frame_medians = [np.nanmedian(dark_frames[f, :, :]) for f in range(n_darks)]
-
-    # Loop through dark frames. Usually this will only have 2 calls
-    for i in range(n_darks):
-
-        # Does the frame have nans?
-        if np.isnan(dark_frames[i, :, :]).all() \
-           or np.isnan(dark_frames[i, :, :]).any():
-            bad_darks.append(i)
-
-        # Is the frame median stupid high?
-        if (frame_medians[i] > 2*np.min(frame_medians)) \
-            or (frame_medians[i] > 2000): # fail safe - some files have a crazy dark and a nan dark.
-            bad_darks.append(i)
-
-    # Quit here if both darks are bad
-    if (0 in bad_darks) and (1 in bad_darks) and (hard_failure):
-        raise ValueError("Both darks are bad")
-
-    return bad_darks
-    
-
-def subtract_darks(light_fits, darks, bad_darks, bad_lights, set_bad_frames_to_nan=True):
-    """
-    Given matching light and dark fits, subtracts off the darks from lights
-    while also taking into account bad frames, whether due to presence of nan
-    or oversaturation
-
-    Parameters
-    ----------
-    light_fits : fits HDU
-                 observation data
-    darks : 3D numpy ndarray instance, shape (2, spatial bins, spectral bins)
-                  associated dark frames, output of get_dark_frames().
-    bad_darks : list
-                Integration numbers of dark frames that aren't usable, output
-                 of find_bad_dark_frames().
-    bad_lights : list
-                 Integration numbers of light frames that aren't usable, output
-                 of find_bad_light_frames().
-    set_bad_frames_to_nan : bool
-                            If True, any frames with a problem will be set to 
-                            all nans. True is the safest option to avoid fitting
-                            bad data. 
-                            Can be set to False for quicklook generation.
-
-    Returns
-    ----------
-    dark_subtracted : numpy ndarray
-                      The light datacube with dark current subtracted.
-
-    """
-
-    light_data = light_fits['Primary'].data
-
-    # Make the array to store dark-subtracted data
-    dark_subtracted = np.zeros_like(light_data)
-
-    # Get a list of indices of good frames by differencing the indices of all remaining frames with bad indices.
-    i_all = np.asarray(range(0, dark_subtracted.shape[0])) # ALL frame indices
-    i_good = np.setxor1d(i_all, bad_lights).astype(int)  # ALL good frames, for return. 
-    i_good_except_0th = np.setxor1d(i_good, [0]).astype(int)  # Used to do the dark subtraction for the 1st through nth frames.
-
-    # Do the dark subtraction: separately for frame 0 which has its own dark, then all other frames, then set bad frames to nan.
-    # Note that it's possible at this point for EITHER first_dark OR second_dark to contain NaNs. If they do,
-    # their associated light frame will be caught and set to nan in the line that sets nans below.
-    if 0 not in bad_darks:
-        dark_subtracted[0, :, :] = light_data[0] - darks[0, :, :]
-    else:
-        dark_subtracted[0, :, :] = light_data[0] - darks[1, :, :]
-
-    # Here, we should account for the possibility that no second dark exists 
-    # (get_dark_frames() would have set it to all nan). 
-    # In that case, let's use the first dark frame for all frames.
-    if 1 in bad_darks:
-        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[0, :, :]
-    else:
-        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[1, :, :]
-
-    # Set any light frames with problems to entirely nan. 
-    # This ensures we won't fit bad data for the data product pipeline. However,
-    # It's a good idea to pass in set_bad_frames_to_all_nan = False for quicklook
-    # generation so we can inspect the data.
-    if set_bad_frames_to_nan:
-        dark_subtracted[bad_lights, :, :] = np.nan
-
-    # Throw an error if there are no acceptable light frames
-    if np.isnan(dark_subtracted).all(): 
-        raise Exception(f"Missing critical observation data: no valid lights")
-
-    return dark_subtracted
-
-
-def get_dark_frames(dark_fits):
-    """
-    Given a fits file containing dark integrations, this will create a first
-    and second dark (or 0th and 1st if you will) based on what's in the file.
-    If only one frame, second is set to nan. If >2 frames, all those 2+ are 
-    averaged to form the second dark. 
-
-    Parameters
-    ----------
-    dark_fits : astropy.io.fits instance
-                fits file containing dark integrations
-
-    Returns
-    ----------
-    darks : 3D numpy ndarray
-            The same shape as the dark data product primary HDU, but forced to
-            have only 2 integrations.
-    """
-    n_ints_dark = get_n_int(dark_fits)
-
-    # Make a grand array to store the darks - we only ever want 2 final.
-    darks = np.empty((2, *dark_fits["Primary"].data.shape[-2:]))
-
-    if n_ints_dark == 0:
-        raise Exception(f"{dark_fits['Primary'].header['FILENAME']} has no darks at all")
-    elif n_ints_dark == 1: 
-        # Early mission, only one dark frame was taken.
-        darks[0, :, :] = dark_fits['Primary'].data[0]
-        darks[1, :, :] = np.nan # Set the second frame to nans if there was only one dark frame taken
-    elif n_ints_dark == 2:
-        # Noise pattern of the first and every other frame is different. Eventually, we realized this
-        # and started taking two darks
-        darks[0, :, :] = dark_fits['Primary'].data[0]
-        darks[1, :, :] = dark_fits['Primary'].data[1]
-    elif n_ints_dark > 2:
-        # If there's more than 2, we can just take the element-wise mean of frames 2:end. Ignore nans.
-        darks[0, :, :] = dark_fits['Primary'].data[0]
-        darks[1, :, :] = np.nanmean(dark_fits['Primary'].data[1:, :, :], axis=0)
-
-    return darks
 
 
 def pair_lights_and_darks(selected_l1a, dark_idx, verbose=False):
@@ -1368,6 +1114,266 @@ def make_dark_index(ech_l1a_idx):
     
     return dark_idx
 
+# Manipulate light and dark frames during fit processing ----------------------
+
+def coadd_lights(data, n_good):
+    """
+    Co-add all light frames within light_fits, including subtraction
+    of dark frames in dark_fits.
+
+    Parameters
+    ----------
+    data : array
+           detector image data, size (frames, spatial, wavelength)
+    n_good : int
+             number of valid frames of data used, calculated by subtract_darks.
+
+    Returns
+    ----------
+    coadded_lights : array
+                     Essentially the mean-frame of the detector
+    """
+    
+    # Do the co-adding
+    coadded_lights = np.nansum(data, axis=0)
+
+    # return everything necessary; this basically returns an average frame (because it divides by total frames used).
+    return coadded_lights / n_good
+
+
+def subtract_darks(light_fits, darks, bad_darks, bad_lights, set_bad_frames_to_nan=True):
+    """
+    Given matching light and dark fits, subtracts off the darks from lights
+    while also taking into account bad frames, whether due to presence of nan
+    or oversaturation
+
+    Parameters
+    ----------
+    light_fits : fits HDU
+                 observation data
+    darks : 3D numpy ndarray instance, shape (2, spatial bins, spectral bins)
+                  associated dark frames, output of get_dark_frames().
+    bad_darks : list
+                Integration numbers of dark frames that aren't usable, output
+                 of find_bad_dark_frames().
+    bad_lights : list
+                 Integration numbers of light frames that aren't usable, output
+                 of find_bad_light_frames().
+    set_bad_frames_to_nan : bool
+                            If True, any frames with a problem will be set to 
+                            all nans. True is the safest option to avoid fitting
+                            bad data. 
+                            Can be set to False for quicklook generation.
+
+    Returns
+    ----------
+    dark_subtracted : numpy ndarray
+                      The light datacube with dark current subtracted.
+
+    """
+
+    light_data = light_fits['Primary'].data
+
+    # Make the array to store dark-subtracted data
+    dark_subtracted = np.zeros_like(light_data)
+
+    # Get a list of indices of good frames by differencing the indices of all remaining frames with bad indices.
+    i_all = np.asarray(range(0, dark_subtracted.shape[0])) # ALL frame indices
+    i_good = np.setxor1d(i_all, bad_lights).astype(int)  # ALL good frames, for return. 
+    i_good_except_0th = np.setxor1d(i_good, [0]).astype(int)  # Used to do the dark subtraction for the 1st through nth frames.
+
+    # Do the dark subtraction: separately for frame 0 which has its own dark, then all other frames, then set bad frames to nan.
+    # Note that it's possible at this point for EITHER first_dark OR second_dark to contain NaNs. If they do,
+    # their associated light frame will be caught and set to nan in the line that sets nans below.
+    if 0 not in bad_darks:
+        dark_subtracted[0, :, :] = light_data[0] - darks[0, :, :]
+    else:
+        dark_subtracted[0, :, :] = light_data[0] - darks[1, :, :]
+
+    # Here, we should account for the possibility that no second dark exists 
+    # (get_dark_frames() would have set it to all nan). 
+    # In that case, let's use the first dark frame for all frames.
+    if 1 in bad_darks:
+        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[0, :, :]
+    else:
+        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[1, :, :]
+
+    # Set any light frames with problems to entirely nan. 
+    # This ensures we won't fit bad data for the data product pipeline. However,
+    # It's a good idea to pass in set_bad_frames_to_all_nan = False for quicklook
+    # generation so we can inspect the data.
+    if set_bad_frames_to_nan:
+        dark_subtracted[bad_lights, :, :] = np.nan
+
+    # Throw an error if there are no acceptable light frames
+    if np.isnan(dark_subtracted).all(): 
+        raise Exception(f"Missing critical observation data: no valid lights")
+
+    return dark_subtracted
+
+
+def get_dark_frames(dark_fits):
+    """
+    Given a fits file containing dark integrations, this will create a first
+    and second dark (or 0th and 1st if you will) based on what's in the file.
+    If only one frame, second is set to nan. If >2 frames, all those 2+ are 
+    averaged to form the second dark. 
+
+    Parameters
+    ----------
+    dark_fits : astropy.io.fits instance
+                fits file containing dark integrations
+
+    Returns
+    ----------
+    darks : 3D numpy ndarray
+            The same shape as the dark data product primary HDU, but forced to
+            have only 2 integrations.
+    """
+    n_ints_dark = get_n_int(dark_fits)
+
+    # Make a grand array to store the darks - we only ever want 2 final.
+    darks = np.empty((2, *dark_fits["Primary"].data.shape[-2:]))
+
+    if n_ints_dark == 0:
+        raise Exception(f"{dark_fits['Primary'].header['FILENAME']} has no darks at all")
+    elif n_ints_dark == 1: 
+        # Early mission, only one dark frame was taken.
+        darks[0, :, :] = dark_fits['Primary'].data[0]
+        darks[1, :, :] = np.nan # Set the second frame to nans if there was only one dark frame taken
+    elif n_ints_dark == 2:
+        # Noise pattern of the first and every other frame is different. Eventually, we realized this
+        # and started taking two darks
+        darks[0, :, :] = dark_fits['Primary'].data[0]
+        darks[1, :, :] = dark_fits['Primary'].data[1]
+    elif n_ints_dark > 2:
+        # If there's more than 2, we can just take the element-wise mean of frames 2:end. Ignore nans.
+        darks[0, :, :] = dark_fits['Primary'].data[0]
+        darks[1, :, :] = np.nanmean(dark_fits['Primary'].data[1:, :, :], axis=0)
+
+    return darks
+
+
+# Find problem integrations --------------------------------------------
+
+def find_bad_light_frames(light_fits, bad_darks):
+    """
+    Identifies the integration numbers of light frames that aren't usable. The
+    types of unusable light frames (and keys in the returned dictionary) are
+    1) "nan": The frame has some nans, or all nans.
+    2) "broken": The frame is probably saturated (has a high median).
+    3) "bad_dark": The associated dark frame is bad, so we can't process the 
+                   light frame even if the light frame has valid data.
+    4) "corrupt": The data seem good, but were taken with commanding errors;
+                  there might be MUV contamination, a visible keyhole, or both.
+
+    Parameters
+    ----------    
+    light_fits : astropy.io.fits HDU instance
+                 A single light observation file
+    bad_darks : list
+                List of bad dark indices in ascending order, so,
+                typically one of: [0], [0, 1], [1]. 
+
+    Returns
+    ----------
+    all_bad_lights : list
+                     Integration numbers of light frames in light_fits that aren't
+                     usable.
+    (unnamed dict) : Dict
+                     Each key is shorthand for a problem with the light integrations
+                     listed in the value. 
+    
+    """
+
+    # Lists to keep track of everything
+    nan_light_inds = [] # frames with NaN
+    bad_light_inds = [] # Oversaturated or broken
+    lights_with_bad_darks = []
+    all_bad_lights = []
+
+    n_int = get_n_int(light_fits)
+
+    # Find medians of all frames
+    frame_medians = [np.nanmedian(light_fits['primary'].data[f, :, :]) for f in range(n_int)]
+
+    # Associated dark index
+    assoc_dark = [0] + [1] * (n_int-1)
+
+    for i in range(n_int):
+
+        # Frames with any nans
+        if np.isnan(light_fits['primary'].data[i, :, :]).any():
+            nan_light_inds.append(i)
+            continue
+        
+        # Frames with outlier median values, indicating saturation or weirdness
+        if (frame_medians[i] > 3*np.nanmedian(frame_medians)):
+            bad_light_inds.append(i)
+            continue
+
+        # Check if their dark frame is bad
+        if assoc_dark[i] in bad_darks:
+            lights_with_bad_darks.append(i)
+            continue
+    
+    # Finally, check for corrupt frames
+    corrupt_frames = get_corrupt_frames(light_fits)
+
+    all_bad_lights = sorted(list(set([*nan_light_inds, *bad_light_inds,
+                                      *lights_with_bad_darks, *corrupt_frames])))
+
+    return all_bad_lights, {"nan": nan_light_inds, 
+                            "broken": bad_light_inds, 
+                            "bad_dark": lights_with_bad_darks, 
+                            "corrupt": corrupt_frames}
+
+
+def find_bad_dark_frames(dark_frames, hard_failure=True):
+    """
+    Determines whether the dark frames provided are good or bad. That's it.
+
+    Parameters
+    ----------
+    dark_frames : 3D numpy ndarray
+                  Two dark frames, as returned by get_dark_frames().
+    hard_failure : boolean
+                   if True, will throw an exception if both darks are bad.
+                   If not, it won't. (Set to False to allow a quicklook to be 
+                   generated anyway)
+
+    Returns
+    ----------
+    bad_darks : list
+                Integration numbers of any unusable dark frames
+
+    """
+
+    n_darks = np.shape(dark_frames)[0]
+    bad_darks = []
+
+    # Get all the medians of the darks so we can compare each frame
+    frame_medians = [np.nanmedian(dark_frames[f, :, :]) for f in range(n_darks)]
+
+    # Loop through dark frames. Usually this will only have 2 calls
+    for i in range(n_darks):
+
+        # Does the frame have nans?
+        if np.isnan(dark_frames[i, :, :]).all() \
+           or np.isnan(dark_frames[i, :, :]).any():
+            bad_darks.append(i)
+
+        # Is the frame median stupid high?
+        if (frame_medians[i] > 2*np.min(frame_medians)) \
+            or (frame_medians[i] > 2000): # fail safe - some files have a crazy dark and a nan dark.
+            bad_darks.append(i)
+
+    # Quit here if both darks are bad
+    if (0 in bad_darks) and (1 in bad_darks) and (hard_failure):
+        raise ValueError("Both darks are bad")
+
+    return bad_darks
+    
 
 def get_corrupt_frames(light_fits):
     """
@@ -1494,81 +1500,8 @@ def get_corrupt_frames(light_fits):
 
     return corrupt_frames
 
-# Count rates ----------------------------------------------------------
-
-
-def get_countrate_diagnostics(hdul):
-    """
-    Produces the count rate in DN/pix/s in the H and D emissions, as 
-    well as in the background near the emissions.
-
-    Parameters
-    ----------
-    hdul : astropy FITS HDUList object
-           HDU list for a given observation
-
-    Returns
-    -------
-    dictionary
-           containing the count rates and number of pixels included 
-           in areas on the detector covering:
-           (1) H Ly alpha emission;
-           (2) H Ly alpha background;
-           (3) D Ly alpha emission;
-           (4) D Ly alpha background.
-
-
-    """
-    Hlya_spapixrange = np.array([ech_Lya_slit_start, ech_Lya_slit_end])
-    Hlya_countrate, Hlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [450, 505])
-    
-
-    Hbkg_spapixrange = Hlya_spapixrange + 2*(ech_Lya_slit_end-ech_Lya_slit_start)
-    
-    # Modify the background if the file is nonlinear
-    if 'SPE_SIZE' not in hdul['primary'].header:
-        Hbkg_spapixrange += 4  # Since usually this works out to 724, 913, 
-                               # and the nonlinearly binned files have a 
-                               # blackout zone up to pixel 728.
-
-    Hbkg_countrate, Hbkg_npix = get_avg_pixel_count_rate(hdul, Hbkg_spapixrange, [450, 505])
-    
-    Dlya_countrate, Dlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [415, 450])
-    Dbkg_countrate, Dbkg_npix = get_avg_pixel_count_rate(hdul, Hbkg_spapixrange, [505, 540])
-    
-    return {'Hlya_countrate':Hlya_countrate,
-            'Hlya_npix':Hlya_npix,
-            'Hbkg_countrate':Hbkg_countrate,
-            'Hbkg_npix':Hbkg_npix,
-            'Dlya_countrate':Dlya_countrate,
-            'Dlya_npix':Dlya_npix,
-            'Dbkg_countrate':Dbkg_countrate,
-            'Dbkg_npix':Dbkg_npix}
-
-
-def get_lya_countrates(idx_entry):
-    """
-    Computes the mean countrates for H and D emissions and nearby background.
-    
-    Parameters
-    ----------
-    idx_entry : dictionary
-                Contains metadata for a given file
-                
-    Returns
-    -------
-    dictionary
-              Contains the mean count rates (disregarding nans) of H and D Lyman alpha emissions,
-              as well as the nearby backgrounds
-    """
-    rates = idx_entry['countrate_diagnostics']
-    
-    return {'Hlya': np.nanmean(rates['Hlya_countrate']), 'Hbkg': np.nanmean(rates['Hbkg_countrate']),
-            'Dlya': np.nanmean(rates['Dlya_countrate']), 'Dbkg': np.nanmean(rates['Dbkg_countrate'])}
-
 
 # Metadata -------------------------------------------------------------
-
 
 def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None):
     """
@@ -1765,7 +1698,8 @@ def update_metadata_file(the_data_dir, idx_file, geospatial=False):
     entries_missing_keys = [] # of ints 
     entries_missing_geom = []
 
-    # FIRST: Find entries with missing metadata keys and entries which are missing geom.
+    # FIRST: Find entries with missing metadata keys, missing geom, or 
+    # bad countrates
     for (i, e) in enumerate(idx_file):
 
         # Skip weird early mission stuff
@@ -1780,7 +1714,7 @@ def update_metadata_file(the_data_dir, idx_file, geospatial=False):
             if geospatial:
                 if file_metadata_is_missing_geom(e):
                     entries_missing_geom.append(i)
-   
+
 
     # SECOND:  Update entries with missing metadata keys 
     for missingkey_i in entries_missing_keys:
@@ -1924,6 +1858,77 @@ def find_files_with_geometry(file_index):
     # print(f'{len(with_geom)} have geometry.\n')
     return with_geom
 
+
+def get_countrate_diagnostics(hdul):
+    """
+    Produces the count rate in DN/pix/s in the H and D emissions, as 
+    well as in the background near the emissions.
+
+    Parameters
+    ----------
+    hdul : astropy FITS HDUList object
+           HDU list for a given observation
+
+    Returns
+    -------
+    dictionary
+           containing the count rates and number of pixels included 
+           in areas on the detector covering:
+           (1) H Ly alpha emission;
+           (2) H Ly alpha background;
+           (3) D Ly alpha emission;
+           (4) D Ly alpha background.
+
+
+    """
+    Hlya_spapixrange = np.array([ech_Lya_slit_start, ech_Lya_slit_end])
+    Hlya_countrate, Hlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [450, 505])
+    
+
+    Hbkg_spapixrange = Hlya_spapixrange + 2*(ech_Lya_slit_end-ech_Lya_slit_start)
+    
+    # Modify the background if the file is nonlinear
+    if 'SPE_SIZE' not in hdul['primary'].header:
+        Hbkg_spapixrange += 4  # Since usually this works out to 724, 913, 
+                               # and the nonlinearly binned files have a 
+                               # blackout zone up to pixel 728.
+
+    Hbkg_countrate, Hbkg_npix = get_avg_pixel_count_rate(hdul, Hbkg_spapixrange, [450, 505])
+    
+    Dlya_countrate, Dlya_npix = get_avg_pixel_count_rate(hdul, Hlya_spapixrange, [415, 450])
+    Dbkg_countrate, Dbkg_npix = get_avg_pixel_count_rate(hdul, Hbkg_spapixrange, [505, 540])
+    
+    return {'Hlya_countrate':Hlya_countrate,
+            'Hlya_npix':Hlya_npix,
+            'Hbkg_countrate':Hbkg_countrate,
+            'Hbkg_npix':Hbkg_npix,
+            'Dlya_countrate':Dlya_countrate,
+            'Dlya_npix':Dlya_npix,
+            'Dbkg_countrate':Dbkg_countrate,
+            'Dbkg_npix':Dbkg_npix}
+
+
+def get_lya_countrates(idx_entry):
+    """
+    Computes the mean countrates for H and D emissions and nearby background.
+    
+    Parameters
+    ----------
+    idx_entry : dictionary
+                Contains metadata for a given file
+                
+    Returns
+    -------
+    dictionary
+              Contains the mean count rates (disregarding nans) of H and D Lyman alpha emissions,
+              as well as the nearby backgrounds
+    """
+    rates = idx_entry['countrate_diagnostics']
+    
+    return {'Hlya': np.nanmean(rates['Hlya_countrate']), 'Hbkg': np.nanmean(rates['Hbkg_countrate']),
+            'Dlya': np.nanmean(rates['Dlya_countrate']), 'Dbkg': np.nanmean(rates['Dbkg_countrate'])}
+
+
 # Basic echelle mode information ----------------------------------------
 
 def get_ech_slit_indices(light_fits):
@@ -1950,7 +1955,7 @@ def get_ech_slit_indices(light_fits):
                            return_npix=False))
 
 
-# L1c processing ===========================================================
+# L1c processing ==============================================================
 
 def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c_savepath, 
                        process_timestamp=None,
@@ -2037,7 +2042,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         and (run_writeout==True) and (overwrite==False):
         print("The target l1c and its label file already exist, skipping")
         return "OK"
-        
+
     # Set number of integration frames to fit 
     # ===============================================================================================
     if isinstance(ints_to_fit, int):
@@ -2201,89 +2206,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     return None
 
 
-def clean_data(data, all_bad_lights, clean_method="new", remove_rays=True, remove_hotpix=True):
-    """
-    Performs dark subtraction and data cleanup. 
-    Parameters
-    ----------
-    data : array
-           data cube, already dark-subtracted.
-    all_bad_lights : list
-                     list of indices of frames that are so broken they can't be fit.
-    clean_method : string
-                   "new" uses the vectorized methods developed here for Python.
-                   "old" re-implmements what was done in IDL (slower)
-    remove_rays : boolean
-                  if True, the remove_cosmic_rays() routine will be run.
-    remove_hotpix : boolean
-                    if True, the remove_hot_pixels() routine will be run.
-    
-    Returns
-    ----------
-    data : array
-           cleaned up data cube, format (n_integrations) x (n_spa) x (n_spe)
-    """
-
-    if clean_method=="new":
-        if remove_rays:
-            data = remove_cosmic_rays(data, std_or_mad="mad")
-        if remove_hotpix:
-            data = remove_hot_pixels(data, all_bad_lights) 
-    elif clean_method=="old":
-        # raise Exception(f"Shape: {data.shape}")
-        Nwaves = data.shape[2]
-        Nspaces = data.shape[1]
-        Nint = data.shape[0]
-        # Cosmic rays
-        for w in range(0, Nwaves-1): 
-            for s in range(0, Nspaces-1):
-                pixvalue = data[:, s, w]
-                medval   = median_high(pixvalue) # As in IDL pipeline - median is called without the /EVEN keyword, biasing it toward high values. 
-                                                    # Possibly, IDL defaults changed at some point during the mission.
-                sigma    = np.std(pixvalue, ddof=1)
-                whererays    = np.where( (pixvalue > medval+2*sigma) | (pixvalue < medval-2*sigma) )
-                pixvalue[whererays] = medval
-                data[:, s, w] = pixvalue
-
-        # Hot pixels
-        Wdt = 3
-        for i in range(0, Nint-1): 
-            for w in range(Wdt, Nwaves-1-Wdt):
-                for s in range(Wdt, Nspaces-1-Wdt): 
-                    Farea = data[i, s-Wdt:s+Wdt+1, w-Wdt:w+Wdt+1]
-                    Fmed = np.median(Farea)
-                    Fsigma = np.sqrt( np.sum((Farea-Fmed)**2) / ((2.*Wdt+1)**2) )
-                    Fdif = data[i, s, w] - Fmed 
-                    if (Fdif > 3*Fsigma) | (Fdif < -3*Fsigma): 
-                        data[i, s, w] = np.median(data[i, s-Wdt:s+Wdt+1, w-Wdt:w+Wdt+1])
-
-    return data
-
-
-def flatten(light_fits, processed_data):
-    """
-    Parameters
-    ----------
-    light_fits : astropy.io.fits instance
-                File with light observation
-    processed_data : array
-                   cleaned up data cube, format (n_integrations) x (n_spa) x (n_spe)
-    
-    Returns
-    ----------
-    spec, unc : arrays
-                dimenion (n_int) x (n_spe), the spectrum and associated data uncertainties 
-                coadded across the spatial dimension.
-    """
-    # Uncertainty on the data 
-    # ============================================================================================
-    ran_DN = ran_DN_uncertainty(light_fits, processed_data)
-    
-    # WARNING: refactored get_spectrum. 
-    spec = get_spectrum(processed_data, light_fits, coadded=False, integration=None)  
-    unc = add_in_quadrature(ran_DN, light_fits, coadded=False, integration=None) 
-
-    return spec, unc
+# Set up fit parameter and uncertainty names; Here to allow Jax to work.
 
 _fit_parameter_names = ['total_brightness_H',  # DN
                         'total_brightness_D',  # DN
@@ -2303,6 +2226,136 @@ _fit_parameter_non_IPH_idxs = np.setdiff1d(range(0, len(_fit_parameter_names)), 
 _fit_parameter_background_idxs = [i for i, name in enumerate(_fit_parameter_names) if 'background' in name]
 _fit_parameter_non_background_idxs = np.setdiff1d(range(0, len(_fit_parameter_names)), _fit_parameter_background_idxs)
 
+
+def get_binning_df(calibration="new"):
+    """
+    Old way of determining numbers to use for binning. TODO: Delete this and
+    update any code that relies on it to use the methods used in updated fit routines
+    """
+
+    if calibration=="new": 
+        return pd.DataFrame({  
+                                "Nspa": [18, 50, 159, 92, 64, 74, 1024],
+                                "Nspe": [201, 160, 160, 512, 384, 332, 1024],
+                                "NbinsY": [38, 11, 5, 11, 11, 11, 1], 
+                                "xcH": [178, 261, 260, 0, 256, 256, 0],
+                                "ycH": [310, 299, 229, 5, 313, 203, 0],
+                                "aprow1": [1, 4, 23, 31, 3, 13, 346],
+                                "aprow2": [6, 21, 61, 48, 20, 30, 535],
+                                "noise_lo_lim": [8, 8, 8, 25, 10, 10, 8],
+                                "noise_hi_lim": [42, 28, 28, 60, 37, 30, 42],
+                                "back_rows_arr": [[0, 1-1, 6+1, 6+1], 
+                                                [0, 4-1, 21+3, 21+5], 
+                                                [0, 23-1, 61+5, 61+11],
+                                                [27, 31-1, 48+3, 48+5], 
+                                                [0, 3-1, 20+3, 20+5], 
+                                                [0, 13-1, 30+3, 30+5], 
+                                                [27, 346-11, 535+11, 535+43]]
+                            })
+    elif calibration=="old": 
+        return pd.DataFrame({"Nspa":          [18,  50,  159, 92,  64,  74,  1024],
+                            "Nspe":          [201, 160, 160, 512, 384, 332, 1024],
+                            "NbinsY":        [38,  11,  5,   11,  11,  11,  1], 
+                            "xcH":           [178, 261, 260, 0,   256, 256, 0],
+                            "ycH":           [310, 299, 229, 5,   313, 203, 0],
+                            "aprow1":        [1,   4,   23,  31,  3,   13,  346],
+                            "aprow2":        [6,   21,  61,  48,  20,  30,  535],
+                            "noise_lo_lim":  [35,  35,  8,   35,  20,  20,  8],
+                            "noise_hi_lim":  [115, 75,  28,  100, 70,  70,  42],
+                            "back_rows_arr": [[0, 1, 7, 9], 
+                                            [0, 2, 22, 24], 
+                                            [0, 23-1, 61+5, 61+11], # 159x160 not defined in old calibration, this row won't be used
+                                            [27, 29, 49, 51], 
+                                            [0, 4, 23, 25], 
+                                            [0, 13, 34, 40], 
+                                            [27, 346-11, 535+11, 535+43]] # 1024x1024 not defined in old calibration, this row won't be used
+                        })
+
+
+# Conversion functions ========================================================
+
+def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_params, fit_uncertainties, 
+                              fitted_integrations, calibration="new"): 
+    """
+    Given model fitting output, this converts it to physical units.
+
+    Parameters
+    ----------
+    light_fits : astropy.io.fits instance
+                File with light observation
+    arrays_to_convert_to_kR_pernm : list
+                                    Including the spectrum data, data uncertainties, model fit array and background fit array
+    fit_params : list of dictionaries 
+                 Each dictionary contains the best-fit parameters for the lineshape model fit to flattened spectra in light_fits. 
+    fit_uncertainties : list
+                        the fit uncertainties on the parameters in fit_params. 
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
+    calibration : string
+                  "new" or "old": controls the conversion factors, as these differ in the original IDL pipeline
+    
+    Returns
+    ----------
+    arrays_in_kR_pernm : list of arrays
+                         The same as arrays_to_convert_to_kR_pernm, but now converted.
+    fit_params_converted : list of dictionaries
+                           Same as fit_params, but now converted to kR.
+    fit_unc_converted : list of dictionaries
+                        same as fit_uncertainties, converted to kR
+    """
+    # Conversion factors
+    # ============================================================================================
+    t_int = light_fits["Primary"].header["INT_TIME"] 
+    binwidth_nm = np.diff(get_bin_edges(light_fits))
+    
+    conv_to_kR_per_nm, _, conv_to_kR = get_conversion_factors(t_int, binwidth_nm, calibration=calibration)
+
+    # Convert the data and model fit arrays to physical units.
+    arrays_in_kR_pernm = []
+    for arr_DN in arrays_to_convert_to_kR_pernm:
+        arrays_in_kR_pernm.append(convert_spectrum_DN_to_photoevents(light_fits, arr_DN) * conv_to_kR_per_nm)
+    
+    # Set up storage for converted values
+    fit_params_converted = copy.deepcopy(fit_params)
+    fit_unc_converted = copy.deepcopy(fit_uncertainties)
+    
+    for i in fitted_integrations:  # Because it's now a list of dicts
+        fit_params_converted[i]['total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_H']) * conv_to_kR # H brightness
+        fit_params_converted[i]['total_brightness_D'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_D']) * conv_to_kR # D brightness
+        fit_unc_converted[i]['unc_total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_H']) * conv_to_kR
+        fit_unc_converted[i]['unc_total_brightness_D'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_D']) * conv_to_kR
+        
+        fit_params_converted[i]['total_brightness_IPH'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_IPH']) * conv_to_kR
+        fit_unc_converted[i]['unc_total_brightness_IPH'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_IPH']) * conv_to_kR
+
+    return arrays_in_kR_pernm, fit_params_converted, fit_unc_converted
+
+
+def get_conversion_factors(t_int, binwidth_nm, calibration="new"):
+    """
+    Identify and return the appropriate conversion factors for the data.
+    """
+    Aeff =  32.327455  # Median and mode value of effective area of the 
+                       # instrument. In reality the value shouldn't change, 
+                       # but does somewhat probably due to other variations in
+                       # the IDL pipeline process.
+
+    if calibration=="new":
+        conv_to_kR_with_LSFunit = ech_LSF_unit / (t_int)
+    elif calibration=="old":
+        Ph_pers_perkR = 29.8 # Average calibration factor WRT SWAN (Mayyasi+ 2017)
+        Adj_Factor = 1# 100/88  # This factor is used in IDL, but it accounts for the fact that the method used is not flux-conservative.
+                                # We are using a conservative fit method so we don't need it, but I'm placing it here just in case
+                                # we need to refer to it in future / in case I did something wrong.
+        conv_to_kR_with_LSFunit = Adj_Factor / (t_int * Ph_pers_perkR)
+
+    conv_to_kR_per_nm = 1 / (t_int * binwidth_nm * Aeff)
+    conv_to_kR = 1 / (t_int * Aeff) # This only works if the same binning for wavelengths has been used throughout mission (which it has thus far, as of 2025)
+
+    return conv_to_kR_per_nm, conv_to_kR_with_LSFunit, conv_to_kR
+
+
+# Line fitting ================================================================
 
 def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynesty",
                   calibration="new", return_each_line_fit=True, ints_to_fit="all",
@@ -2464,8 +2517,6 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
                                                         p=len(initial_guess), 
                                                         reduced=True)
 
-        
-       
         if i in bad_frames:
             fit_params_dict["failed_fit"] = True
             for k in _fit_parameter_names:
@@ -2485,606 +2536,6 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
 
     return I_fit_array, H_fit_array, D_fit_array, IPH_fit_array, fit_params_dicts, fit_unc_dicts
 
-
-def make_fit_param_dict(thelist, is_fitparams=True):
-    """
-    Convert a list of either modeled parameters or uncertainties 
-    to a dictionary for ease of access.
-
-    Parameters
-    ----------
-    thelist : list
-                List of either fit parameters or fit parameter uncertainties found by the 
-                optimizer. Names are defined in the global scope variables:
-                _fit_parameter_names, _unc_parameter_names.
-    is_fitparams : bool 
-                   if True, _fit_parameter_names will be used. If False, 
-                   _unc_parameter_names.
-    BU_bg : None or array
-            if a prescribed background is provided, the list entries that relate
-            to a model-fitted background will be ignored.
-    
-    Returns
-    ----------
-    param_dict: dict
-                Dictionary with parameters mapped to a useful keyword
-
-    """
-    param_dict = dict()
-    name_list = None
-
-    if is_fitparams:
-        if len(thelist) == len(_fit_parameter_names):
-            inds = [i for i,p in enumerate(_fit_parameter_names)]
-
-        # else, if the length of the list is the param names with backgrounds excluded,
-        elif len(thelist) == len(_fit_parameter_non_background_idxs):
-            inds = _fit_parameter_non_background_idxs
-        else: 
-            raise Exception(f"Error: len(thelist) != len(param_names) {len(thelist)} != ({len(_fit_parameter_names)} | {len(_fit_parameter_non_background_idxs)})")
-
-        # Now fill the values 
-        for i in inds:
-            param_dict[_fit_parameter_names[i]] = thelist[i]
-        param_dict['central_wavelength_D'] = param_dict['central_wavelength_H'] - D_offset # nm
-
-    # Uncertainty parameters
-    else:
-        if len(thelist) == len(_unc_parameter_names):
-            inds = [i for i, p in enumerate(_unc_parameter_names)]
-        elif len(thelist) == len(_fit_parameter_non_background_idxs):
-            inds = _fit_parameter_non_background_idxs
-        else: 
-            raise Exception(f"Error: len(thelist) != len(unc_names) {len(thelist)} != ({len(_unc_parameter_names)} | {len(_fit_parameter_non_background_idxs)})")
-        
-        # Now fill values 
-        for i in inds:
-            param_dict[_unc_parameter_names[i]] = thelist[i]
-
-    return param_dict
-
-
-def make_array_of_fitted_backgrounds(light_fits, fit_params, fitted_integrations):
-    """
-    The fitting algorithms return best fits for the parameters of the background model, so to turn them 
-    into actual arrays similar to the spectrum array, we have to call the function that constructs them
-    and fill an array.
-
-    Parameters
-    ----------
-    light_fits : astropy.io.fits instance
-                File with light observation
-    fit_params : dictionary
-                 Contains the best-fit parameters for the lineshape model fit to flattened spectra
-                 in light_fits. 
-    fitted_integrations : list of ints
-                          integrations in light_fits for which fits were produced
-
-    Returns
-    ----------
-    bg_fits : array, shape (n_ints, n_wavelengths)
-              Each row is the fitted background for a particular spectrum.
-    """
-    n_integrations = get_n_int(light_fits)
-    wavelengths = get_wavelengths(light_fits)
-    bg_fits = np.ndarray((n_integrations, len(wavelengths))) # check this
-    
-    for i in fitted_integrations:
-        bg_fits[i, :] = background(wavelengths, fit_params[i]['central_wavelength_H'], fit_params[i]['background_b'], fit_params[i]['background_m'], fit_params[i]['background_m2'])  #, fit_params[i]['background_m3'])
-
-    return bg_fits
-
-
-# Write out with IDL ==========================================================
-
-def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
-                 fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
-                 spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
-                 process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
-                 open_idl=True, 
-                 # Use these arguments when muiltiprocessing is not employed.
-                 proc=None, stderr_queue=None, stderr_thread=None,
-                 # Use the following with multiprocessing only.
-                 cmd_queue=None):
-    """
-    Writes out result of model fitting to an l1c file via a call to IDL.
-
-    Parameters
-    ----------
-    light_l1a_path : string
-                     Location of the source l1a data product on the local computer
-    dark_l1a_path : string
-                    Location of the associated dark file on the local computer
-    l1c_savepath : string
-                   Path to which to save the l1c file
-    light_fits : astropy.io.fits instance
-                File with light observation
-    fit_params_list : list of dictionaries
-                      Contains model fit parameters for each integration in light_fits, in kR per nm.
-    fit_unc_list : list of dictionaries
-                   Contains model fit uncertainties for each integration in light_fits, in kR per nm.
-    I_fit, H_fit, D_fit, IPH_fit bg_fit: arrays
-                                         Total model and each component fits
-    spec_kR_pernm, data_unc_kR_pernm : arrays
-                                       Spectra and data uncertainties in physical units
-    bright_data_ph_per_s_array : array
-                                 data values in photons/sec, needed to maintain 
-                                 continuity with earlier data products.
-    idl_pipeline_folder : string
-                          Location of the IDL pipeline code on the local computer 
-    open_idl : bool
-               if True, the IDL process will be started inside this function.
-    proc : subprocess instance
-           subprocess process instance, will be written to if open_idl 
-           is False.
-    stderr_queue: queue.Queue() instance
-                  for keeping track of output to stderr from subprocess
-    stderr_thread: threading.Thread() instance
-                   for watching for the message saying that compilation of 
-                   write_l1c_file_from_python.pro has succeeded
-    
-    Returns
-    ----------
-    an l1c .fits.gz file, written out from IDL.
-    """
-
-    # Check right away if we are doing multiprocessing or not.
-    if cmd_queue is None and not open_idl:
-        if proc is None or stderr_queue is None or stderr_thread is None:
-            raise Exception("Need to pass in:\n" \
-                            "\t1) proc (subprocess.Popen instance)\n"\
-                            "\t2) stderr_q (queue.Queue() object for queueing stderr output)\n" \
-                            "\t3) stderr_thread (threading.Thread() instance for reading from stderr_q)\n")
-
-    n_int = get_n_int(light_fits)
-
-    # Collect index of the best spatial row representing MRH of the observation
-    center_idx = 4
-    spapixlo_arr = light_fits["binning"].data['spapixlo'][0]
-    i_MRH = iuvs.miscellaneous.find_nearest(spapixlo_arr, ech_best_MRH_pixel,
-                                            price_is_right=True)[0] 
-
-    # Collect all the brightnesses and uncertainties into lists 
-    H_brightnesses = [fit_params_list[i]['total_brightness_H'] for i in range(n_int)]
-    D_brightnesses = [fit_params_list[i]['total_brightness_D'] for i in range(n_int)]
-    IPH_brightnesses = [fit_params_list[i]['total_brightness_IPH'] for i in range(n_int)]
-    H_1sig = [fit_unc_list[i]['unc_total_brightness_H'] for i in range(n_int)]
-    D_1sig = [fit_unc_list[i]['unc_total_brightness_D'] for i in range(n_int)]
-    IPH_1sig = [fit_unc_list[i]['unc_total_brightness_IPH'] for i in range(n_int)]
-
-    # Collect wavelengths
-    H_lya_ctr = [fit_params_list[i]['central_wavelength_H'] for i in range(n_int)]
-    IPH_lya_ctr = [fit_params_list[i]['central_wavelength_IPH'] for i in range(n_int)]
-    H_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_H'] for i in range(n_int)]
-    IPH_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_IPH'] for i in range(n_int)]
-
-    product_creation_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y/%j %b %d %H:%M:%S.%fUTC')
-    seg = iuvs_segment_from_fname(light_fits["Primary"].header['Filename'])
-    # in IDL the microseconds are only 5 digits long and 0, so idk.
-    brightness_HDU_dict = {
-        # Brightnesses - shape: (n_int,)
-        "BRIGHT_H_kR": H_brightnesses,
-        "BRIGHT_D_kR": D_brightnesses,
-        "BRIGHT_IPH_kR": IPH_brightnesses,
-        # Uncertainties - shape: (n_int,)
-        "BRIGHT_H_OneSIGMA_kR": H_1sig,
-        "BRIGHT_D_OneSIGMA_kR": D_1sig,
-        "BRIGHT_IPH_OneSIGMA_kR": IPH_1sig,
-        # OTHER - shape: (n_int,)
-        "MRH_ALTITUDE_km": light_fits["PixelGeometry"].data["pixel_corner_mrh_alt"][:, i_MRH, center_idx], # MRH in km
-        "TANGENT_SZA_deg": light_fits["PixelGeometry"].data["pixel_solar_zenith_angle"][:, i_MRH], # SZA in degrees
-        "ET": light_fits["Integration"].data["ET"], 
-        "UTC": light_fits["Integration"].data["UTC"],
-        "PRODUCT_CREATION_DATE": [product_creation_date for i in range(len(H_brightnesses))],
-        "ORBIT_SEGMENT": [seg for i in range(len(H_brightnesses))],
-        # This stuff will go into the line center 
-        # central wavelengths - shape: (n_int,)
-        "H_LYA_CENTER": H_lya_ctr,
-        "D_LYA_CENTER": [i - D_offset for i in H_lya_ctr],
-        "IPH_LYA_CENTER": IPH_lya_ctr,
-        # Uncertainties on centers - shape: (n_int,)
-        "H_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, 
-        "D_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, # Same as H bc it's a const
-        "IPH_LYA_CENTER_OneSIGMA": IPH_lya_ctr_1sig,
-    }
-
-    # handle easy stuff
-    brightness_and_linectr_df = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in brightness_HDU_dict.items() ]) )
-
-    # The following is the spectrum with the background subtracted as stated. It needs its own file because we need to write out 
-    # 10 different arrays. The IDL pipeline only writes out the last integration's spectrum 10 times, for some reason. 
-    # This error has been corrected in this version. 
-    bright_data_ph_per_s_df = pd.DataFrame(data=bright_data_ph_per_s_array.transpose(),    # values
-                                        columns=[f"i={j}" for j in range(n_int)])  # 1st row as the column names
-    
-    # Transpose arrays
-    I_t = I_fit.transpose()
-    H_t = H_fit.transpose()
-    D_t = D_fit.transpose()
-    IPH_t = IPH_fit.transpose()
-    bg_t = bg_fit.transpose()
-    spec_t = spec_kR_pernm.transpose()
-    data_unc_t = data_unc_kR_pernm.transpose()
-
-    # Interleave the arrays, creating one big array with format:
-    # I_0, H_0, D_0, IPH_0, bg_0, spec_0, data_unc_0, I_1, ... data_unc_1, I_2...data_unc_n
-    # Where the subscript is the integratio number, up to n, and each 
-    # item is a vector (rows = wavelengths)
-    interleaved = np.stack((I_t, H_t, D_t, IPH_t, bg_t, spec_t, data_unc_t), 
-                           axis=2).reshape(I_t.shape[0], -1)
-
-    # Make dataframe
-    fits_n_spec_df = pd.DataFrame(data=interleaved,
-                                  columns=[f"{lbl}, i={j}" for j in range(n_int) 
-                                           for lbl in ["total_model", 
-                                                       "H_fit", 
-                                                       "D_fit", 
-                                                       "IPH_fit", 
-                                                       "background", 
-                                                       "coadded_spectrum", 
-                                                       "unc_spectrum"]
-                                          ]
-                                 )
-    
-    # Save the output to some temporary files that will be saved outside the Python module.
-    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
-    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
-    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
-
-    # Collect the names for use 
-    all_fits_csv_path = all_fits_csv_tf.name
-    brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
-    ph_per_s_csv_path = ph_per_s_csv_tf.name
-    
-    # Have to make a different value for NaN for IDL
-    narep = -9999
-    brightness_and_linectr_df.to_csv(brightness_and_linectr_csv_path, index=False, na_rep=narep)
-    bright_data_ph_per_s_df.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
-    fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
-
-    # Now call IDL
-    if cmd_queue is None:
-        # Mostly used when processing just a few files and not running IDL at a higher level.
-        if open_idl is True:
-            proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
-
-        # IDL has been opened at a higher level and the process passed in
-        output_log = l1c_savepath + "IDLoutput.txt"
-
-        # Create queue and thread to track the stdout
-        stdout_queue = queue.Queue()
-        stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
-                                                                    stdout_queue, 
-                                                                    output_log), 
-                                                            daemon=True)
-        stdout_thread.start()
-
-        # Send IDL write command
-        proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                        '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
-                        '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                        '{ph_per_s_csv_path}'\n")
-        proc.stdin.flush()
-        time.sleep(1)
-
-        # Check that files have been created 
-        target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
-        target_l1c_fullpath = l1c_savepath + target_l1c_filename
-        target_fits = Path(target_l1c_fullpath)
-        target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
-        file_process_success = f"IDL finished {target_l1c_filename}"
-
-        if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
-            print(f"File and label writeout succeeded")
-            returnval = "IDL OK"
-        else:
-            print(f"Python detects that an error occurred in IDL")
-            returnval = "IDL error"
-
-        # Make sure stdout queue is clear between calls I think?
-        with stdout_queue.mutex:
-            stdout_queue.queue.clear()
-        
-        return returnval
-    
-    # Multiprocessing usage
-    else: 
-        cmd_queue.put(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                     '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
-                     '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                     '{ph_per_s_csv_path}'\n", timeout=3)
-        return "IDL OK"
-
-
-def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt",
-                                         start_stderr_q_and_thread=True):
-    """
-    Opens IDL with subprocess, and starts a thread to monitor the output to 
-    check for when the script to writeout files in IDL has been compiled.
-
-    Parameters
-    ----------
-    l1c_savepath : string
-                Location in which to save the error log
-    errlogname : string
-                filename for the error log 
-    Returns
-    ----------
-    proc : subprocess Popen instance
-        subprocess containing the call to IDL 
-    stderr_queue : Queue() instance
-                   Lets content be read from the pipe while it's also written 
-                   out to a log. 
-    stderr_thread : threading.Thread() instance
-                    with start_reader(), keeps track of output from IDL to 
-                    watch for the key message to tell when script is compiled
-    """
-    print("Opening IDL")
-    os.chdir(idl_pipeline_dir)
-    
-    err_log = l1c_savepath + errlogname
-
-    proc = subprocess.Popen(["stdbuf", "-oL", "-eL", "idl", "-quiet"],
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True, bufsize=1)
-    
-    if start_stderr_q_and_thread:
-        stderr_queue = queue.Queue()
-        
-        # Start background readers
-        stderr_thread = threading.Thread(target=start_reader, 
-                                         args=(proc.stderr, stderr_queue, err_log), 
-                                         daemon=True)
-        stderr_thread.start()
-
-    proc.stdin.write(".com write_l1c_file_from_python.pro\n")
-    proc.stdin.flush()
-
-    if check_for_success_msg(stderr_queue, "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON.", timeout=5):
-        print("Compiled write_l1c_file_from_python.")
-    else:
-        print("Compile failed.")
-    
-    return proc, stderr_queue, stderr_thread
-
-
-def start_reader(pipe, output_queue, log_file_path):
-    """
-    Continuously read from a pipe (stdout or stderr), line by line,
-    writing to a queue and logging to a file.
-
-    Parameters
-    ----------
-    pipe : subprocess.pipe instance
-           Intended to accept the proc.stderr 
-    output_queue : Queue() instance
-                keeps track of IDL output while also allowing it to be written out to a file
-    log_file_path : string
-                    name of log file to which to write IDL output
-    
-    Returns
-    ----------
-    none
-    """
-    with open(log_file_path, 'a', encoding='utf-8') as log_file:
-        for line in iter(pipe.readline, ''):
-            log_file.write(line)
-            log_file.flush()
-            output_queue.put(line.rstrip())
-
-    pipe.close()
-
-
-def check_for_success_msg(output_queue, target_phrase, timeout=10):
-    """
-    Read lines from a queue until the last one matches the target_phrase.
-    Times out after `timeout` seconds.
-
-    Parameters
-    ----------
-    output_queue : Queue() instance
-                keeps track of IDL output for reading while also allowing it to be written to file
-    target_phrase : string
-                    Key phrase to look for in IDL output to tell when a certain milestone has been achieved.
-    timeout : int
-            Time in seconds after which to give up waiting.
-    Returns
-    ----------
-    boolean - whether the goal is achieved
-    """
-    start_time = time.time()
-    buffer = []
-
-    while True:
-        try:
-            line = output_queue.get(timeout=0.1)
-            buffer.append(line)
-        except queue.Empty:
-            pass
-
-        # Break if time exceeded
-        if time.time() - start_time > timeout:
-            print("Timeout waiting for phrase.")
-            return False
-
-        # If buffer is not empty and last line matches
-        if buffer and buffer[-1].strip() == target_phrase:
-            return True
-        
-
-def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, fitted_integrations):
-    """
-    The echelle l1c files typically report a quantity referred to in IDL pipeline as bright_data_ph_per_s, 
-    e.g. photoevents per second. This function computes this value so that it can continue to be reported.
-    
-    Parameters
-    ----------
-    light_fits : astropy.io.fits instance
-                File with light observation
-    spectrum : array, shape (n_ints, n_wavelengths)
-               The flattened data spectra for each integration in light_fits
-    fit_params : dictionary
-                 Contains the best-fit parameters for the lineshape model fit to flattened spectra
-                 in light_fits. 
-    bg_fits : array, shape (n_ints, n_wavelengths)
-              Each row is the fitted background for a particular spectrum. Output from make_array_of_fitted_backgrounds.
-    fitted_integrations : list of ints
-                          integrations in light_fits for which fits were produced
-    Returns
-    ----------
-    bright_data_ph_per_s : array, shape (n_ints, n_wavelengths)
-                           Data at each recorded wavelength, in units of photons/sec with the background subtracted off.
-    """
-    t_int = light_fits["Primary"].header["INT_TIME"] 
-    wavelengths = get_wavelengths(light_fits)
-    n_int = get_n_int(light_fits)
-    bright_data_ph_per_s = np.zeros((n_int, wavelengths.shape[0]))
-
-    # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
-    spec_ph_s = convert_spectrum_DN_to_photoevents(light_fits, spectrum) / (t_int)
-    background_array_ph_s = convert_spectrum_DN_to_photoevents(light_fits, bg_fits) / (t_int)
-
-    for i in fitted_integrations:
-        if "failed_fit" not in fit_params[i].keys():
-            # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
-            popt, pcov = sp.optimize.curve_fit(background, wavelengths, background_array_ph_s[i, :],
-                                            p0=[121.567, 0, 0, 0],
-                                            bounds=([121.5, -np.inf, -np.inf, -np.inf],
-                                                    [121.6, np.inf, np.inf, np.inf])) 
-            bg_ph_s = background(wavelengths, *popt)
-            bright_data_ph_per_s[i, :] = spec_ph_s[i, :] - bg_ph_s
-        else:
-            bright_data_ph_per_s[i, :] = np.full_like(spec_ph_s[i, :], np.nan)
-
-
-    return bright_data_ph_per_s
-
-# Conversion functions ========================================================
-
-def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_params, fit_uncertainties, 
-                              fitted_integrations, calibration="new"): 
-    """
-    Given model fitting output, this converts it to physical units.
-
-    Parameters
-    ----------
-    light_fits : astropy.io.fits instance
-                File with light observation
-    arrays_to_convert_to_kR_pernm : list
-                                    Including the spectrum data, data uncertainties, model fit array and background fit array
-    fit_params : list of dictionaries 
-                 Each dictionary contains the best-fit parameters for the lineshape model fit to flattened spectra in light_fits. 
-    fit_uncertainties : list
-                        the fit uncertainties on the parameters in fit_params. 
-    fitted_integrations : list of ints
-                          integrations in light_fits for which fits were produced
-    calibration : string
-                  "new" or "old": controls the conversion factors, as these differ in the original IDL pipeline
-    
-    Returns
-    ----------
-    arrays_in_kR_pernm : list of arrays
-                         The same as arrays_to_convert_to_kR_pernm, but now converted.
-    fit_params_converted : list of dictionaries
-                           Same as fit_params, but now converted to kR.
-    fit_unc_converted : list of dictionaries
-                        same as fit_uncertainties, converted to kR
-    """
-    # Conversion factors
-    # ============================================================================================
-    t_int = light_fits["Primary"].header["INT_TIME"] 
-    binwidth_nm = np.diff(get_bin_edges(light_fits))
-    
-    conv_to_kR_per_nm, _, conv_to_kR = get_conversion_factors(t_int, binwidth_nm, calibration=calibration)
-
-    # Convert the data and model fit arrays to physical units.
-    arrays_in_kR_pernm = []
-    for arr_DN in arrays_to_convert_to_kR_pernm:
-        arrays_in_kR_pernm.append(convert_spectrum_DN_to_photoevents(light_fits, arr_DN) * conv_to_kR_per_nm)
-    
-    # Set up storage for converted values
-    fit_params_converted = copy.deepcopy(fit_params)
-    fit_unc_converted = copy.deepcopy(fit_uncertainties)
-    
-    for i in fitted_integrations:  # Because it's now a list of dicts
-        fit_params_converted[i]['total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_H']) * conv_to_kR # H brightness
-        fit_params_converted[i]['total_brightness_D'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_D']) * conv_to_kR # D brightness
-        fit_unc_converted[i]['unc_total_brightness_H'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_H']) * conv_to_kR
-        fit_unc_converted[i]['unc_total_brightness_D'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_D']) * conv_to_kR
-        
-        fit_params_converted[i]['total_brightness_IPH'] = convert_spectrum_DN_to_photoevents(light_fits, fit_params[i]['total_brightness_IPH']) * conv_to_kR
-        fit_unc_converted[i]['unc_total_brightness_IPH'] = convert_spectrum_DN_to_photoevents(light_fits, fit_uncertainties[i]['unc_total_brightness_IPH']) * conv_to_kR
-
-    return arrays_in_kR_pernm, fit_params_converted, fit_unc_converted
-
-
-def get_conversion_factors(t_int, binwidth_nm, calibration="new"):
-    """
-    Identify and return the appropriate conversion factors for the data.
-    """
-    Aeff =  32.327455  # Median and mode value of effective area of the 
-                       # instrument. In reality the value shouldn't change, 
-                       # but does somewhat probably due to other variations in
-                       # the IDL pipeline process.
-
-    if calibration=="new":
-        conv_to_kR_with_LSFunit = ech_LSF_unit / (t_int)
-    elif calibration=="old":
-        Ph_pers_perkR = 29.8 # Average calibration factor WRT SWAN (Mayyasi+ 2017)
-        Adj_Factor = 1# 100/88  # This factor is used in IDL, but it accounts for the fact that the method used is not flux-conservative.
-                                # We are using a conservative fit method so we don't need it, but I'm placing it here just in case
-                                # we need to refer to it in future / in case I did something wrong.
-        conv_to_kR_with_LSFunit = Adj_Factor / (t_int * Ph_pers_perkR)
-
-    conv_to_kR_per_nm = 1 / (t_int * binwidth_nm * Aeff)
-    conv_to_kR = 1 / (t_int * Aeff) # This only works if the same binning for wavelengths has been used throughout mission (which it has thus far, as of 2025)
-
-    return conv_to_kR_per_nm, conv_to_kR_with_LSFunit, conv_to_kR
-
-
-def get_binning_df(calibration="new"):
-    if calibration=="new": 
-        return pd.DataFrame({  
-                                "Nspa": [18, 50, 159, 92, 64, 74, 1024],
-                                "Nspe": [201, 160, 160, 512, 384, 332, 1024],
-                                "NbinsY": [38, 11, 5, 11, 11, 11, 1], 
-                                "xcH": [178, 261, 260, 0, 256, 256, 0],
-                                "ycH": [310, 299, 229, 5, 313, 203, 0],
-                                "aprow1": [1, 4, 23, 31, 3, 13, 346],
-                                "aprow2": [6, 21, 61, 48, 20, 30, 535],
-                                "noise_lo_lim": [8, 8, 8, 25, 10, 10, 8],
-                                "noise_hi_lim": [42, 28, 28, 60, 37, 30, 42],
-                                "back_rows_arr": [[0, 1-1, 6+1, 6+1], 
-                                                [0, 4-1, 21+3, 21+5], 
-                                                [0, 23-1, 61+5, 61+11],
-                                                [27, 31-1, 48+3, 48+5], 
-                                                [0, 3-1, 20+3, 20+5], 
-                                                [0, 13-1, 30+3, 30+5], 
-                                                [27, 346-11, 535+11, 535+43]]
-                            })
-    elif calibration=="old": 
-        return pd.DataFrame({"Nspa":          [18,  50,  159, 92,  64,  74,  1024],
-                            "Nspe":          [201, 160, 160, 512, 384, 332, 1024],
-                            "NbinsY":        [38,  11,  5,   11,  11,  11,  1], 
-                            "xcH":           [178, 261, 260, 0,   256, 256, 0],
-                            "ycH":           [310, 299, 229, 5,   313, 203, 0],
-                            "aprow1":        [1,   4,   23,  31,  3,   13,  346],
-                            "aprow2":        [6,   21,  61,  48,  20,  30,  535],
-                            "noise_lo_lim":  [35,  35,  8,   35,  20,  20,  8],
-                            "noise_hi_lim":  [115, 75,  28,  100, 70,  70,  42],
-                            "back_rows_arr": [[0, 1, 7, 9], 
-                                            [0, 2, 22, 24], 
-                                            [0, 23-1, 61+5, 61+11], # 159x160 not defined in old calibration, this row won't be used
-                                            [27, 29, 49, 51], 
-                                            [0, 4, 23, 25], 
-                                            [0, 13, 34, 40], 
-                                            [27, 346-11, 535+11, 535+43]] # 1024x1024 not defined in old calibration, this row won't be used
-                        })
-
-
-# Line fitting ================================================================
 
 def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
                 fit_IPH_component=False, BU_bg=np.nan,
@@ -3181,6 +2632,8 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
         f_tol = 1e-8
         try:
             bestfit = sp.optimize.minimize(negloglikelihood_jit, pig,
+                                           # jac=negloglikelihood_jacobian_jit,  # TRy with other solvers. 
+                                           # hess=negloglikelihood_hessian_jit,
                                            args=objfn_args,
                                            method=solver,
                                            options={"xtol": x_tol,  
@@ -3395,7 +2848,6 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
             fig4, ax4 = dyplot.cornerplot(dresults, dims=dims, color="cornflowerblue", 
                                           labels=lbls, label_kwargs={"labelpad": 1e8})
             
-
         samples = dresults.samples
         weights = dresults.importance_weights()
         max_logl = max(dresults.logl)
@@ -3414,7 +2866,6 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
 
         return modeled_params, I_bin, fit_uncert, H_bin, D_bin, IPH_bin
 
-# Components
 
 def line_fit_initial_guess(light_fits, wavelengths, spectra, coadded=False,
                            H_a=20, H_b=170, D_a=80, D_b=100):
@@ -3450,6 +2901,7 @@ def line_fit_initial_guess(light_fits, wavelengths, spectra, coadded=False,
             H_b = min(np.argmax(spectrum) + 50, len(spectrum))
             D_a = max(0, np.argmax(spectrum) - 30)
             D_b = min(np.argmax(spectrum) - 10, len(spectrum))
+            
             # Now control for either of these both somehow being accidentally set to 0
             if D_a == D_b == 0:
                 D_b += 20
@@ -3479,8 +2931,103 @@ def line_fit_initial_guess(light_fits, wavelengths, spectra, coadded=False,
                          lambda_H_lya_guess, lambda_IPH_lya_guess[i],
                          width_IPH_guess,
                          bg_b_guess, bg_m_guess, bg_m2_guess]  # , bg_m3_guess]
-
     return guesses
+
+
+def make_fit_param_dict(thelist, is_fitparams=True):
+    """
+    Convert a list of either modeled parameters or uncertainties 
+    to a dictionary for ease of access.
+
+    Parameters
+    ----------
+    thelist : list
+                List of either fit parameters or fit parameter uncertainties found by the 
+                optimizer. Names are defined in the global scope variables:
+                _fit_parameter_names, _unc_parameter_names.
+    is_fitparams : bool 
+                   if True, _fit_parameter_names will be used. If False, 
+                   _unc_parameter_names.
+    BU_bg : None or array
+            if a prescribed background is provided, the list entries that relate
+            to a model-fitted background will be ignored.
+    
+    Returns
+    ----------
+    param_dict: dict
+                Dictionary with parameters mapped to a useful keyword
+
+    """
+    param_dict = dict()
+    name_list = None
+
+    if is_fitparams:
+        if len(thelist) == len(_fit_parameter_names):
+            inds = [i for i,p in enumerate(_fit_parameter_names)]
+
+        # else, if the length of the list is the param names with backgrounds excluded,
+        elif len(thelist) == len(_fit_parameter_non_background_idxs):
+            inds = _fit_parameter_non_background_idxs
+        else: 
+            raise Exception(f"Error: len(thelist) != len(param_names) {len(thelist)} != ({len(_fit_parameter_names)} | {len(_fit_parameter_non_background_idxs)})")
+
+        # Now fill the values 
+        for i in inds:
+            param_dict[_fit_parameter_names[i]] = thelist[i]
+        param_dict['central_wavelength_D'] = param_dict['central_wavelength_H'] - D_offset # nm
+
+    # Uncertainty parameters
+    else:
+        if len(thelist) == len(_unc_parameter_names):
+            inds = [i for i, p in enumerate(_unc_parameter_names)]
+        elif len(thelist) == len(_fit_parameter_non_background_idxs):
+            inds = _fit_parameter_non_background_idxs
+        else: 
+            raise Exception(f"Error: len(thelist) != len(unc_names) {len(thelist)} != ({len(_unc_parameter_names)} | {len(_fit_parameter_non_background_idxs)})")
+        
+        # Now fill values 
+        for i in inds:
+            param_dict[_unc_parameter_names[i]] = thelist[i]
+
+    return param_dict
+
+
+# Background stuff ------------------------------------------------------------
+
+def make_array_of_fitted_backgrounds(light_fits, fit_params, fitted_integrations):
+    """
+    The fitting algorithms return best fits for the parameters of the background 
+    model, so to turn them into actual arrays similar to the spectrum array, 
+    we have to call the function that constructs them and fill an array.
+
+    Parameters
+    ----------
+    light_fits : astropy.io.fits instance
+                File with light observation
+    fit_params : dictionary
+                 Contains the best-fit parameters for the lineshape model fit to flattened spectra
+                 in light_fits. 
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
+
+    Returns
+    ----------
+    bg_fits : array, shape (n_ints, n_wavelengths)
+              Each row is the fitted background for a particular spectrum.
+    """
+    n_integrations = get_n_int(light_fits)
+    wavelengths = get_wavelengths(light_fits)
+    bg_fits = np.ndarray((n_integrations, len(wavelengths))) # check this
+    
+    for i in fitted_integrations:
+        bg_fits[i, :] = background(wavelengths, 
+                                   fit_params[i]['central_wavelength_H'], 
+                                   fit_params[i]['background_b'], 
+                                   fit_params[i]['background_m'], 
+                                   fit_params[i]['background_m2'])  
+                                   #, fit_params[i]['background_m3'])
+
+    return bg_fits
 
 
 def background(lamda, lamda_c, b, m, m2=0):
@@ -3558,7 +3105,7 @@ def make_BU_background(data_cube, bg_inds, n_int, binning_param_dict, calibratio
         return backgrounds_oldcal
 
 
-# Objective functions
+# Objective functions and Lineshape Model -------------------------------------
 def negloglikelihood(params, *args):
     """
     Returns the negative of loglikelihood(). Since loglikelihood() includes
@@ -3702,35 +3249,8 @@ def lineshape_model(params, wavelength_data, binedges, theCLSF, BU_bg, fit_IPH_c
     return I_bin, H_fit, D_fit, IPH_fit
 
 
-def badness_bg(params, wavelength_data, DN_data):
-    """
-    Similar to badness, but for a linear fit to the background on the detector.
-    Used so we can fit the background in off-slit regions and dark files for
-    determining how good the fit is at representing the background.
+# LSF loading and interpolation -----------------------------------------------
 
-    Parameters
-    ----------
-    params : array
-             Parameters for the line in the format M, B, lambda_c (of hydrogen).
-    wavelength_data : array
-             wavelength that will be fit; nm 
-    DN_data : array
-              DN of the spectrum that will be fit 
-    """
-
-    # initial guess
-    bg_m_guess, bg_b_guess, bg_lamc_guess = params
-
-    # "model"
-    DN_model = background(wavelength_data, bg_lamc_guess, bg_b_guess, bg_m_guess, bg_m2_guess)
-
-    # "badness"
-    badness = np.sum((DN_model - DN_data)**2 / 1)  # No uncertainty on this since it's not a real fit.
-
-    return badness
-
-
-# LSF loading and interpolation
 def interpolate_CLSF(lambda_c, binedges, CLSF):
     """
     Given a particular lambda_c, this function computes the CLSF as a
@@ -3832,7 +3352,34 @@ def load_lsf(calibration="new"):
     return lsfx_nm, lsf_f
 
 
-# Functions that help flatten arrays
+# Functions that help flatten arrays ==========================================
+
+def flatten(light_fits, processed_data):
+    """
+    Parameters
+    ----------
+    light_fits : astropy.io.fits instance
+                File with light observation
+    processed_data : array
+                   cleaned up data cube, format (n_integrations) x (n_spa) x (n_spe)
+    
+    Returns
+    ----------
+    spec, unc : arrays
+                dimenion (n_int) x (n_spe), the spectrum and associated data uncertainties 
+                coadded across the spatial dimension.
+    """
+    # Uncertainty on the data 
+    # ============================================================================================
+    ran_DN = ran_DN_uncertainty(light_fits, processed_data)
+    
+    # WARNING: refactored get_spectrum. 
+    spec = get_spectrum(processed_data, light_fits, coadded=False, integration=None)  
+    unc = add_in_quadrature(ran_DN, light_fits, coadded=False, integration=None) 
+
+    return spec, unc
+
+
 def get_wavelengths(light_fits):
     """
     Retrieves wavelengths for use from a given light file. This is done in more than one place,
@@ -4050,7 +3597,457 @@ def predict_IPH_linecenter(light_fits):
     return delta_lambda_iph # Line shift per integration
     
 
-# Cosmic ray and hot pixel removal --------------------------------------------
+# Write out with IDL ==========================================================
+
+def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
+                 fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
+                 spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
+                 process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
+                 open_idl=True, 
+                 # Use these arguments when muiltiprocessing is not employed.
+                 proc=None, stderr_queue=None, stderr_thread=None,
+                 # Use the following with multiprocessing only.
+                 cmd_queue=None):
+    """
+    Writes out result of model fitting to an l1c file via a call to IDL.
+
+    Parameters
+    ----------
+    light_l1a_path : string
+                     Location of the source l1a data product on the local computer
+    dark_l1a_path : string
+                    Location of the associated dark file on the local computer
+    l1c_savepath : string
+                   Path to which to save the l1c file
+    light_fits : astropy.io.fits instance
+                File with light observation
+    fit_params_list : list of dictionaries
+                      Contains model fit parameters for each integration in light_fits, in kR per nm.
+    fit_unc_list : list of dictionaries
+                   Contains model fit uncertainties for each integration in light_fits, in kR per nm.
+    I_fit, H_fit, D_fit, IPH_fit bg_fit: arrays
+                                         Total model and each component fits
+    spec_kR_pernm, data_unc_kR_pernm : arrays
+                                       Spectra and data uncertainties in physical units
+    bright_data_ph_per_s_array : array
+                                 data values in photons/sec, needed to maintain 
+                                 continuity with earlier data products.
+    idl_pipeline_folder : string
+                          Location of the IDL pipeline code on the local computer 
+    open_idl : bool
+               if True, the IDL process will be started inside this function.
+    proc : subprocess instance
+           subprocess process instance, will be written to if open_idl 
+           is False.
+    stderr_queue: queue.Queue() instance
+                  for keeping track of output to stderr from subprocess
+    stderr_thread: threading.Thread() instance
+                   for watching for the message saying that compilation of 
+                   write_l1c_file_from_python.pro has succeeded
+    
+    Returns
+    ----------
+    an l1c .fits.gz file, written out from IDL.
+    """
+
+    # Check right away if we are doing multiprocessing or not.
+    if cmd_queue is None and not open_idl:
+        if proc is None or stderr_queue is None or stderr_thread is None:
+            raise Exception("Need to pass in:\n" \
+                            "\t1) proc (subprocess.Popen instance)\n"\
+                            "\t2) stderr_q (queue.Queue() object for queueing stderr output)\n" \
+                            "\t3) stderr_thread (threading.Thread() instance for reading from stderr_q)\n")
+
+    n_int = get_n_int(light_fits)
+
+    # Collect index of the best spatial row representing MRH of the observation
+    center_idx = 4
+    spapixlo_arr = light_fits["binning"].data['spapixlo'][0]
+    i_MRH = iuvs.miscellaneous.find_nearest(spapixlo_arr, ech_best_MRH_pixel,
+                                            price_is_right=True)[0] 
+
+    # Collect all the brightnesses and uncertainties into lists 
+    H_brightnesses = [fit_params_list[i]['total_brightness_H'] for i in range(n_int)]
+    D_brightnesses = [fit_params_list[i]['total_brightness_D'] for i in range(n_int)]
+    IPH_brightnesses = [fit_params_list[i]['total_brightness_IPH'] for i in range(n_int)]
+    H_1sig = [fit_unc_list[i]['unc_total_brightness_H'] for i in range(n_int)]
+    D_1sig = [fit_unc_list[i]['unc_total_brightness_D'] for i in range(n_int)]
+    IPH_1sig = [fit_unc_list[i]['unc_total_brightness_IPH'] for i in range(n_int)]
+
+    # Collect wavelengths
+    H_lya_ctr = [fit_params_list[i]['central_wavelength_H'] for i in range(n_int)]
+    IPH_lya_ctr = [fit_params_list[i]['central_wavelength_IPH'] for i in range(n_int)]
+    H_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_H'] for i in range(n_int)]
+    IPH_lya_ctr_1sig = [fit_unc_list[i]['unc_central_wavelength_IPH'] for i in range(n_int)]
+
+    product_creation_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y/%j %b %d %H:%M:%S.%fUTC')
+    seg = iuvs_segment_from_fname(light_fits["Primary"].header['Filename'])
+    # in IDL the microseconds are only 5 digits long and 0, so idk.
+    brightness_HDU_dict = {
+        # Brightnesses - shape: (n_int,)
+        "BRIGHT_H_kR": H_brightnesses,
+        "BRIGHT_D_kR": D_brightnesses,
+        "BRIGHT_IPH_kR": IPH_brightnesses,
+        # Uncertainties - shape: (n_int,)
+        "BRIGHT_H_OneSIGMA_kR": H_1sig,
+        "BRIGHT_D_OneSIGMA_kR": D_1sig,
+        "BRIGHT_IPH_OneSIGMA_kR": IPH_1sig,
+        # OTHER - shape: (n_int,)
+        "MRH_ALTITUDE_km": light_fits["PixelGeometry"].data["pixel_corner_mrh_alt"][:, i_MRH, center_idx], # MRH in km
+        "TANGENT_SZA_deg": light_fits["PixelGeometry"].data["pixel_solar_zenith_angle"][:, i_MRH], # SZA in degrees
+        "ET": light_fits["Integration"].data["ET"], 
+        "UTC": light_fits["Integration"].data["UTC"],
+        "PRODUCT_CREATION_DATE": [product_creation_date for i in range(len(H_brightnesses))],
+        "ORBIT_SEGMENT": [seg for i in range(len(H_brightnesses))],
+        # This stuff will go into the line center 
+        # central wavelengths - shape: (n_int,)
+        "H_LYA_CENTER": H_lya_ctr,
+        "D_LYA_CENTER": [i - D_offset for i in H_lya_ctr],
+        "IPH_LYA_CENTER": IPH_lya_ctr,
+        # Uncertainties on centers - shape: (n_int,)
+        "H_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, 
+        "D_LYA_CENTER_OneSIGMA": H_lya_ctr_1sig, # Same as H bc it's a const
+        "IPH_LYA_CENTER_OneSIGMA": IPH_lya_ctr_1sig,
+    }
+
+    # handle easy stuff
+    brightness_and_linectr_df = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in brightness_HDU_dict.items() ]) )
+
+    # The following is the spectrum with the background subtracted as stated. It needs its own file because we need to write out 
+    # 10 different arrays. The IDL pipeline only writes out the last integration's spectrum 10 times, for some reason. 
+    # This error has been corrected in this version. 
+    bright_data_ph_per_s_df = pd.DataFrame(data=bright_data_ph_per_s_array.transpose(),    # values
+                                        columns=[f"i={j}" for j in range(n_int)])  # 1st row as the column names
+    
+    # Transpose arrays
+    I_t = I_fit.transpose()
+    H_t = H_fit.transpose()
+    D_t = D_fit.transpose()
+    IPH_t = IPH_fit.transpose()
+    bg_t = bg_fit.transpose()
+    spec_t = spec_kR_pernm.transpose()
+    data_unc_t = data_unc_kR_pernm.transpose()
+
+    # Interleave the arrays, creating one big array with format:
+    # I_0, H_0, D_0, IPH_0, bg_0, spec_0, data_unc_0, I_1, ... data_unc_1, I_2...data_unc_n
+    # Where the subscript is the integratio number, up to n, and each 
+    # item is a vector (rows = wavelengths)
+    interleaved = np.stack((I_t, H_t, D_t, IPH_t, bg_t, spec_t, data_unc_t), 
+                           axis=2).reshape(I_t.shape[0], -1)
+
+    # Make dataframe
+    fits_n_spec_df = pd.DataFrame(data=interleaved,
+                                  columns=[f"{lbl}, i={j}" for j in range(n_int) 
+                                           for lbl in ["total_model", 
+                                                       "H_fit", 
+                                                       "D_fit", 
+                                                       "IPH_fit", 
+                                                       "background", 
+                                                       "coadded_spectrum", 
+                                                       "unc_spectrum"]
+                                          ]
+                                 )
+    
+    # Save the output to some temporary files that will be saved outside the Python module.
+    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    
+    # Collect the names for use 
+    all_fits_csv_path = all_fits_csv_tf.name
+    brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
+    ph_per_s_csv_path = ph_per_s_csv_tf.name
+    
+    print(f"fits path: {all_fits_csv_path}")
+    print(f"brightness path: {brightness_and_linectr_csv_path}")
+    print(ph_per_s_csv_path)
+
+    
+    # Have to make a different value for NaN for IDL
+    narep = -9999
+    brightness_and_linectr_df.to_csv(brightness_and_linectr_csv_path, index=False, na_rep=narep)
+    bright_data_ph_per_s_df.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
+    fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
+    
+    # Now call IDL
+    if cmd_queue is None:
+        # Mostly used when processing just a few files and not running IDL at a higher level.
+        if open_idl is True:
+            proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
+
+        # IDL has been opened at a higher level and the process passed in
+        output_log = l1c_savepath + "IDLoutput.txt"
+
+        # Create queue and thread to track the stdout
+        stdout_queue = queue.Queue()
+        stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
+                                                                    stdout_queue, 
+                                                                    output_log), 
+                                                            daemon=True)
+        stdout_thread.start()
+
+        # Send IDL write command
+        proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
+                        '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                        '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                        '{ph_per_s_csv_path}'\n")
+        proc.stdin.flush()
+        time.sleep(1)
+
+        # Check that files have been created 
+        target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+        target_l1c_fullpath = l1c_savepath + target_l1c_filename
+        target_fits = Path(target_l1c_fullpath)
+        target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
+        file_process_success = f"IDL finished {target_l1c_filename}"
+
+        if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
+            print(f"File and label writeout succeeded")
+            returnval = "IDL OK"
+        else:
+            print(f"Python detects that an error occurred in IDL")
+            returnval = "IDL error"
+
+        # Make sure stdout queue is clear between calls I think?
+        with stdout_queue.mutex:
+            stdout_queue.queue.clear()
+        
+        return returnval
+    
+    # Multiprocessing usage
+    else: 
+        cmd_queue.put(f"write_l1c_file_from_python, '{light_l1a_path}', \
+                     '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                     '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                     '{ph_per_s_csv_path}'\n", timeout=3)
+        return "IDL OK"
+
+
+def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt",
+                                         start_stderr_q_and_thread=True):
+    """
+    Opens IDL with subprocess, and starts a thread to monitor the output to 
+    check for when the script to writeout files in IDL has been compiled.
+
+    Parameters
+    ----------
+    l1c_savepath : string
+                Location in which to save the error log
+    errlogname : string
+                filename for the error log 
+    Returns
+    ----------
+    proc : subprocess Popen instance
+        subprocess containing the call to IDL 
+    stderr_queue : Queue() instance
+                   Lets content be read from the pipe while it's also written 
+                   out to a log. 
+    stderr_thread : threading.Thread() instance
+                    with start_reader(), keeps track of output from IDL to 
+                    watch for the key message to tell when script is compiled
+    """
+    print("Opening IDL")
+    os.chdir(idl_pipeline_dir)
+    
+    err_log = l1c_savepath + errlogname
+
+    proc = subprocess.Popen(["stdbuf", "-oL", "-eL", "idl", "-quiet"],
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True, bufsize=1)
+    
+    if start_stderr_q_and_thread:
+        stderr_queue = queue.Queue()
+        
+        # Start background readers
+        stderr_thread = threading.Thread(target=start_reader, 
+                                         args=(proc.stderr, stderr_queue, err_log), 
+                                         daemon=True)
+        stderr_thread.start()
+
+    proc.stdin.write(".com write_l1c_file_from_python.pro\n")
+    proc.stdin.flush()
+
+    if check_for_success_msg(stderr_queue, "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON.", timeout=8):
+        print("Compiled write_l1c_file_from_python.")
+    else:
+        print("Compile failed.")
+    
+    return proc, stderr_queue, stderr_thread
+
+
+def start_reader(pipe, output_queue, log_file_path):
+    """
+    Continuously read from a pipe (stdout or stderr), line by line,
+    writing to a queue and logging to a file.
+
+    Parameters
+    ----------
+    pipe : subprocess.pipe instance
+           Intended to accept the proc.stderr 
+    output_queue : Queue() instance
+                keeps track of IDL output while also allowing it to be written out to a file
+    log_file_path : string
+                    name of log file to which to write IDL output
+    
+    Returns
+    ----------
+    none
+    """
+    with open(log_file_path, 'a', encoding='utf-8') as log_file:
+        for line in iter(pipe.readline, ''):
+            log_file.write(line)
+            log_file.flush()
+            output_queue.put(line.rstrip())
+
+    pipe.close()
+
+
+def check_for_success_msg(output_queue, target_phrase, timeout=10):
+    """
+    Read lines from a queue until the last one matches the target_phrase.
+    Times out after `timeout` seconds.
+
+    Parameters
+    ----------
+    output_queue : Queue() instance
+                keeps track of IDL output for reading while also allowing it to be written to file
+    target_phrase : string
+                    Key phrase to look for in IDL output to tell when a certain milestone has been achieved.
+    timeout : int
+            Time in seconds after which to give up waiting.
+    Returns
+    ----------
+    boolean - whether the goal is achieved
+    """
+    start_time = time.time()
+    buffer = []
+
+    while True:
+        try:
+            line = output_queue.get(timeout=0.1)
+            buffer.append(line)
+        except queue.Empty:
+            pass
+
+        # Break if time exceeded
+        if time.time() - start_time > timeout:
+            print("Timeout waiting for phrase.")
+            return False
+
+        # If buffer is not empty and last line matches
+        if buffer and buffer[-1].strip() == target_phrase:
+            return True
+        
+
+def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, fitted_integrations):
+    """
+    The echelle l1c files typically report a quantity referred to in IDL pipeline as bright_data_ph_per_s, 
+    e.g. photoevents per second. This function computes this value so that it can continue to be reported.
+    
+    Parameters
+    ----------
+    light_fits : astropy.io.fits instance
+                File with light observation
+    spectrum : array, shape (n_ints, n_wavelengths)
+               The flattened data spectra for each integration in light_fits
+    fit_params : dictionary
+                 Contains the best-fit parameters for the lineshape model fit to flattened spectra
+                 in light_fits. 
+    bg_fits : array, shape (n_ints, n_wavelengths)
+              Each row is the fitted background for a particular spectrum. Output from make_array_of_fitted_backgrounds.
+    fitted_integrations : list of ints
+                          integrations in light_fits for which fits were produced
+    Returns
+    ----------
+    bright_data_ph_per_s : array, shape (n_ints, n_wavelengths)
+                           Data at each recorded wavelength, in units of photons/sec with the background subtracted off.
+    """
+    t_int = light_fits["Primary"].header["INT_TIME"] 
+    wavelengths = get_wavelengths(light_fits)
+    n_int = get_n_int(light_fits)
+    bright_data_ph_per_s = np.zeros((n_int, wavelengths.shape[0]))
+
+    # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
+    spec_ph_s = convert_spectrum_DN_to_photoevents(light_fits, spectrum) / (t_int)
+    background_array_ph_s = convert_spectrum_DN_to_photoevents(light_fits, bg_fits) / (t_int)
+
+    for i in fitted_integrations:
+        if "failed_fit" not in fit_params[i].keys():
+            # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
+            popt, pcov = sp.optimize.curve_fit(background, wavelengths, background_array_ph_s[i, :],
+                                            p0=[121.567, 0, 0, 0],
+                                            bounds=([121.5, -np.inf, -np.inf, -np.inf],
+                                                    [121.6, np.inf, np.inf, np.inf])) 
+            bg_ph_s = background(wavelengths, *popt)
+            bright_data_ph_per_s[i, :] = spec_ph_s[i, :] - bg_ph_s
+        else:
+            bright_data_ph_per_s[i, :] = np.full_like(spec_ph_s[i, :], np.nan)
+
+
+    return bright_data_ph_per_s
+
+# Outlier rejection (Cosmic ray and hot pixel removal) ========================
+
+def clean_data(data, all_bad_lights, clean_method="new", remove_rays=True, remove_hotpix=True):
+    """
+    Performs dark subtraction and data cleanup. 
+    Parameters
+    ----------
+    data : array
+           data cube, already dark-subtracted.
+    all_bad_lights : list
+                     list of indices of frames that are so broken they can't be fit.
+    clean_method : string
+                   "new" uses the vectorized methods developed here for Python.
+                   "old" re-implmements what was done in IDL (slower)
+    remove_rays : boolean
+                  if True, the remove_cosmic_rays() routine will be run.
+    remove_hotpix : boolean
+                    if True, the remove_hot_pixels() routine will be run.
+    
+    Returns
+    ----------
+    data : array
+           cleaned up data cube, format (n_integrations) x (n_spa) x (n_spe)
+    """
+
+    if clean_method=="new":
+        if remove_rays:
+            data = remove_cosmic_rays(data, std_or_mad="mad")
+        if remove_hotpix:
+            data = remove_hot_pixels(data, all_bad_lights) 
+    elif clean_method=="old":
+        # raise Exception(f"Shape: {data.shape}")
+        Nwaves = data.shape[2]
+        Nspaces = data.shape[1]
+        Nint = data.shape[0]
+        # Cosmic rays
+        for w in range(0, Nwaves-1): 
+            for s in range(0, Nspaces-1):
+                pixvalue = data[:, s, w]
+                medval   = median_high(pixvalue) # As in IDL pipeline - median is called without the /EVEN keyword, biasing it toward high values. 
+                                                    # Possibly, IDL defaults changed at some point during the mission.
+                sigma    = np.std(pixvalue, ddof=1)
+                whererays    = np.where( (pixvalue > medval+2*sigma) | (pixvalue < medval-2*sigma) )
+                pixvalue[whererays] = medval
+                data[:, s, w] = pixvalue
+
+        # Hot pixels
+        Wdt = 3
+        for i in range(0, Nint-1): 
+            for w in range(Wdt, Nwaves-1-Wdt):
+                for s in range(Wdt, Nspaces-1-Wdt): 
+                    Farea = data[i, s-Wdt:s+Wdt+1, w-Wdt:w+Wdt+1]
+                    Fmed = np.median(Farea)
+                    Fsigma = np.sqrt( np.sum((Farea-Fmed)**2) / ((2.*Wdt+1)**2) )
+                    Fdif = data[i, s, w] - Fmed 
+                    if (Fdif > 3*Fsigma) | (Fdif < -3*Fsigma): 
+                        data[i, s, w] = np.median(data[i, s-Wdt:s+Wdt+1, w-Wdt:w+Wdt+1])
+
+    return data
+
 
 def remove_cosmic_rays(data, Ns=2, std_or_mad="mad"): 
     """
