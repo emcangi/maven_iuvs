@@ -601,7 +601,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                 return False
         
     KEYPATH = keyfolder+keyfile
-    MASTER_KEY = pd.read_csv(KEYPATH)
+    MASTER_KEY = pd.read_csv(KEYPATH, dtype="str", na_filter=False)
 
     # Write a backup
     MASTER_KEY.to_csv(KEYPATH+".bak", index=False)
@@ -611,6 +611,9 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
 
     new_lightnames = MASTER_KEY["Light"].copy()
     new_darknames = MASTER_KEY["Dark"].copy()
+    new_segments = MASTER_KEY["Segment"].copy()
+
+    seg_updates = 0
 
     # Cache folder list
     # Get subdirectories
@@ -639,6 +642,11 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
         dfolder = row["Dark Folder"]
         key_lightname = row["Light"]
         key_darkname = row["Dark"]
+
+        # Check that segment is filled in -------------------------------------
+        if row["Segment"] == "":
+            new_segments.loc[i] = iuvs_segment_from_fname(key_lightname)
+            seg_updates += 1
 
         # Lights --------------------------------------------------------------
         disk_lightname = find_match_on_disk(key_lightname, lfolder, orbit_folder_cache)
@@ -702,11 +710,14 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
     # Apply updates once
     MASTER_KEY["Light"] = new_lightnames
     MASTER_KEY["Dark"] = new_darknames
+    MASTER_KEY["Segment"] = new_segments
     
-    if verbose and changes["row"]:
-        print(f"Updated filenames for {len(changes['row'])} files to current version.")
-        for i, o, n in zip(changes["row"], changes["oldname"], changes["newname"]):
-            print(f"Row {i}: {o} ---> {n}")
+    if verbose:
+        print(f"Updated {seg_updates} orbit segment fields")
+        if changes["row"]:
+            print(f"Updated filenames for {len(changes['row'])} files to current version.")
+            for i, o, n in zip(changes["row"], changes["oldname"], changes["newname"]):
+                print(f"Row {i}: {o} ---> {n}")
 
     # Sort it one last time just in case
     MASTER_KEY_new = sort_ldkey_by_date(MASTER_KEY)
