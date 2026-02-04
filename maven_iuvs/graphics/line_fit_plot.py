@@ -56,8 +56,8 @@ def detector_image(myfits,
     # Total frames are already divided out elsewhere (in coadd_lights)
     data = data / npixperbin
 
-    spapixrange, spabintransmit = get_bin_pix_boundaries(myfits, which="spatial")
-    spepixrange, spebintransmit = get_bin_pix_boundaries(myfits, which="spectral")
+    spapixrange, _ = get_bin_pix_boundaries(myfits, which="spatial")
+    spepixrange, _ = get_bin_pix_boundaries(myfits, which="spectral")
 
     padded_data = pad_data_with_missing_bins(myfits, data)
 
@@ -115,7 +115,7 @@ def plot_detector(data_to_plot, spapixrange, spepixrange,
     arange : None or 2-tuple
              Absolute range of DN scale. If None, entire range is
              plotted. Overrides prange.
-    prange : None or 2-tuplen
+    prange : None or 2-tuple
              Percentile range of DN scale. If None, entire range is plotted.
     
     Returns
