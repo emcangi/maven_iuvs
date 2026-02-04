@@ -979,7 +979,126 @@ def coadd_lights(data, n_good):
     return coadded_lights / n_good
 
 
-def subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True):
+def find_bad_light_frames(light_fits, bad_darks):
+    """
+    Identifies the integration numbers of light frames that aren't usable. The
+    types of unusable light frames (and keys in the returned dictionary) are
+    1) "nan": The frame has some nans, or all nans.
+    2) "broken": The frame is probably saturated (has a high median).
+    3) "bad_dark": The associated dark frame is bad, so we can't process the 
+                   light frame even if the light frame has valid data.
+    4) "corrupt": The data seem good, but were taken with commanding errors;
+                  there might be MUV contamination, a visible keyhole, or both.
+
+    Parameters
+    ----------    
+    light_fits : astropy.io.fits HDU instance
+                 A single light observation file
+    bad_darks : list
+                List of bad dark indices in ascending order, so,
+                typically one of: [0], [0, 1], [1]. 
+
+    Returns
+    ----------
+    all_bad_lights : list
+                     Integration numbers of light frames in light_fits that aren't
+                     usable.
+    (unnamed dict) : Dict
+                     Each key is shorthand for a problem with the light integrations
+                     listed in the value. 
+    
+    """
+
+    # Lists to keep track of everything
+    nan_light_inds = [] # frames with NaN
+    bad_light_inds = [] # Oversaturated or broken
+    lights_with_bad_darks = []
+    all_bad_lights = []
+
+    n_int = get_n_int(light_fits)
+
+    # Find medians of all frames
+    frame_medians = [np.nanmedian(light_fits['primary'].data[f, :, :]) for f in range(n_int)]
+
+    # Associated dark index
+    assoc_dark = [0] + [1] * (n_int-1)
+
+    for i in range(n_int):
+
+        # Frames with any nans
+        if np.isnan(light_fits['primary'].data[i, :, :]).any():
+            nan_light_inds.append(i)
+            continue
+        
+        # Frames with outlier median values, indicating saturation or weirdness
+        if (frame_medians[i] > 3*np.nanmedian(frame_medians)):
+            bad_light_inds.append(i)
+            continue
+
+        # Check if their dark frame is bad
+        if assoc_dark[i] in bad_darks:
+            lights_with_bad_darks.append(i)
+            continue
+    
+    # Finally, check for corrupt frames
+    corrupt_frames = get_corrupt_frames(light_fits)
+
+    all_bad_lights = sorted(list(set([*nan_light_inds, *bad_light_inds,
+                                      *lights_with_bad_darks, *corrupt_frames])))
+
+    return all_bad_lights, {"nan": nan_light_inds, 
+                            "broken": bad_light_inds, 
+                            "bad_dark": lights_with_bad_darks, 
+                            "corrupt": corrupt_frames}
+
+
+def find_bad_dark_frames(dark_frames, hard_failure=True):
+    """
+    Determines whether the dark frames provided are good or bad. That's it.
+
+    Parameters
+    ----------
+    dark_frames : 3D numpy ndarray
+                  Two dark frames, as returned by get_dark_frames().
+    hard_failure : boolean
+                   if True, will throw an exception if both darks are bad.
+                   If not, it won't. (Set to False to allow a quicklook to be 
+                   generated anyway)
+
+    Returns
+    ----------
+    bad_darks : list
+                Integration numbers of any unusable dark frames
+
+    """
+
+    n_darks = np.shape(dark_frames)[0]
+    bad_darks = []
+
+    # Get all the medians of the darks so we can compare each frame
+    frame_medians = [np.nanmedian(dark_frames[f, :, :]) for f in range(n_darks)]
+
+    # Loop through dark frames. Usually this will only have 2 calls
+    for i in range(n_darks):
+
+        # Does the frame have nans?
+        if np.isnan(dark_frames[i, :, :]).all() \
+           or np.isnan(dark_frames[i, :, :]).any():
+            bad_darks.append(i)
+
+        # Is the frame median stupid high?
+        if (frame_medians[i] > 2*np.min(frame_medians)) \
+            or (frame_medians[i] > 2000): # fail safe - some files have a crazy dark and a nan dark.
+            bad_darks.append(i)
+
+    # Quit here if both darks are bad
+    if (0 in bad_darks) and (1 in bad_darks) and (hard_failure):
+        raise ValueError("Both darks are bad")
+
+    return bad_darks
+    
+
+def subtract_darks(light_fits, darks, bad_darks, bad_lights, set_bad_frames_to_nan=True):
     """
     Given matching light and dark fits, subtracts off the darks from lights
     while also taking into account bad frames, whether due to presence of nan
@@ -989,10 +1108,14 @@ def subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True):
     ----------
     light_fits : fits HDU
                  observation data
-    first_dark,
-    second_dark : arrays
-                  associated dark frames, previously determined to be
-                  correctly matched
+    darks : 3D numpy ndarray instance, shape (2, spatial bins, spectral bins)
+                  associated dark frames, output of get_dark_frames().
+    bad_darks : list
+                Integration numbers of dark frames that aren't usable, output
+                 of find_bad_dark_frames().
+    bad_lights : list
+                 Integration numbers of light frames that aren't usable, output
+                 of find_bad_light_frames().
     set_bad_frames_to_nan : bool
                             If True, any frames with a problem will be set to 
                             all nans. True is the safest option to avoid fitting
@@ -1001,171 +1124,72 @@ def subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True):
 
     Returns
     ----------
-    nan_light_inds : array
-                     Indices of frames containing nans (bad data).
-    bad_light_inds : array
-                     Indices of any frames that are broken/bad data, but don't contain nans
-                     (appears as over saturation or noisy artifacting)
-    nan_dark_inds : array
-                    Indices of any dark frames which contain nan
+    dark_subtracted : numpy ndarray
+                      The light datacube with dark current subtracted.
 
     """
 
     light_data = light_fits['Primary'].data
 
-    # Retrieve dark frames. Note that get_dark_frames checks to see if the dark
-    # file only has one frame. If that's the case, it creates a second frame, 
-    # but sets it to nan. 
-    darks = get_dark_frames(dark_fits)
-    first_dark = darks[0, :, :]
-    second_dark = darks[1, :, :]
-
     # Make the array to store dark-subtracted data
     dark_subtracted = np.zeros_like(light_data)
 
-    # Set up tracking arrays
-    medians = []
-    good_frame_inds = [] # Frames which appear to have valid data
-    nan_light_inds = [] # frames with NaN
-    bad_light_inds = [] # Light frames which have some problem, i.e. oversaturation, but are not NaN
-    nan_dark_inds = []  # Dark frames with NaN 
-    light_frames_with_nan_dark = [] # Light frames whose dark frame is NaN
-
-    # CHECK VALIDITY OF DARKS 
-    # =========================================================================
-    first_dark_good = True
-    second_dark_good = True
-
-    # # Check goodness of first dark 
-    if (np.isnan(first_dark).any()) or (np.nanmedian(first_dark) > 1000):  # First dark is bad 
-        first_dark_good = False
-    
-    # Check that second dark exists - early in mission, we didn't always take 2 darks.
-    # In those cases we should use the first dark. An all nan second_dark is 
-    # guaranteed by get_dark_frames() above if only one dark frame exists
-    second_dark_exists = True 
-    if np.isnan(second_dark).all():
-        second_dark_exists = False 
-
-    if not second_dark_exists: 
-        # mark it as a bad dark, but don't throw out the light frames.
-        second_dark_good = False
-    elif second_dark_exists:
-        # Check it for goodness.
-        if (np.isnan(second_dark).any()) or (np.nanmedian(second_dark) > 5000): # but it has problems...
-            second_dark_good = False
-
-    if not(first_dark_good or second_dark_good):
-        raise Exception(f"Missing critical observation data: both darks are bad")
-
-    # TODO: Some of the searching for bad frames can be simplified by applying locate_missing_frames,
-    # but this section also contains some additional logic. 
-    # This section could also be sped up.
-    for i in range(0, light_data.shape[0]):
-        # reject light frames which are missing data (have NaN)
-        if np.isnan(light_data[i]).any():
-            nan_light_inds.append(i)
-            continue 
-
-        # reject frames where the median value is absurd - this indicates a broken frame
-        median_this_frame = np.median(light_data[i])
-
-        # We need to specially treat the possible case where the first frame could be broken. 
-        # Unlikely but possible. Currently done by comparing median with values known to be too high
-        # for typical detector image. TODO: Make this better and not rely on hard-coded value.
-        # Most medians are in the 100s due to the typical sky background values being similar.
-        if (not medians) & (median_this_frame >= 5000):
-            bad_light_inds.append(i)
-
-        # For all other light frames, we can compare to the stored median values of known good frames.
-        if (len(medians)>0) and (median_this_frame / np.median(medians) > 10): 
-            bad_light_inds.append(i)
-            continue
-
-        # At this point in the loop, the frame should have good data.
-        good_frame_inds.append(i)
-        medians.append(np.median(median_this_frame))
-
-    # Mark frames as bad if they are associated with the first dark, either by
-    # BEING the first dark, or being the first light, or being the 1-nth light
-    # if the second dark doesn't exist.
-    if not first_dark_good:
-        nan_dark_inds.append(0)
-        light_frames_with_nan_dark.append(0)
-
-        # A bad 1st dark can't be used for light frames 1-n_int in early files
-        # that only had 1 dark frame.
-        if not second_dark_exists:
-            nan_dark_inds.append(1)  # mark it as a bad dark 
-            light_frames_with_nan_dark.extend([i for i in range(1, light_data.shape[0]) if i not in bad_light_inds])  # Mark light frames as bad
-    
-    # Do the same for the second dark and its associated frames, 1-nth lights.
-    if not second_dark_good:
-        nan_dark_inds.append(1)  # mark it as a bad dark 
-
-    # Collect indices of frames which can't be processed for whatever reason. 
-    # Note that any frames whose associated dark frame is 0 WILL be caught here, unless it's an observation where the second
-    # dark didn't exist - those files will use the first dark.
-    i_bad = sorted(list(set([*nan_light_inds, *bad_light_inds, *light_frames_with_nan_dark])))
-
     # Get a list of indices of good frames by differencing the indices of all remaining frames with bad indices.
     i_all = np.asarray(range(0, dark_subtracted.shape[0])) # ALL frame indices
-    i_good = np.setxor1d(i_all, i_bad).astype(int)  # ALL good frames, for return. 
+    i_good = np.setxor1d(i_all, bad_lights).astype(int)  # ALL good frames, for return. 
     i_good_except_0th = np.setxor1d(i_good, [0]).astype(int)  # Used to do the dark subtraction for the 1st through nth frames.
 
     # Do the dark subtraction: separately for frame 0 which has its own dark, then all other frames, then set bad frames to nan.
     # Note that it's possible at this point for EITHER first_dark OR second_dark to contain NaNs. If they do,
     # their associated light frame will be caught and set to nan in the line that sets nans below.
-    dark_subtracted[0, :, :] = light_data[0] - first_dark  
+    if 0 not in bad_darks:
+        dark_subtracted[0, :, :] = light_data[0] - darks[0, :, :]
+    else:
+        dark_subtracted[0, :, :] = light_data[0] - darks[1, :, :]
 
     # Here, we should account for the possibility that no second dark exists 
     # (get_dark_frames() would have set it to all nan). 
     # In that case, let's use the first dark frame for all frames.
-    if (not second_dark_exists) or (not second_dark_good):
-        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - first_dark
+    if 1 in bad_darks:
+        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[0, :, :]
     else:
-        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - second_dark
+        dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[1, :, :]
 
     # Set any light frames with problems to entirely nan. 
     # This ensures we won't fit bad data for the data product pipeline. However,
     # It's a good idea to pass in set_bad_frames_to_all_nan = False for quicklook
     # generation so we can inspect the data.
     if set_bad_frames_to_nan:
-        dark_subtracted[i_bad, :, :] = np.nan
+        dark_subtracted[bad_lights, :, :] = np.nan
 
     # Throw an error if there are no acceptable light frames
     if np.isnan(dark_subtracted).all(): 
         raise Exception(f"Missing critical observation data: no valid lights")
 
-    return dark_subtracted, len(i_good), [nan_light_inds, bad_light_inds, light_frames_with_nan_dark, nan_dark_inds]
+    return dark_subtracted
 
 
-def get_dark_frames(dark_fits, average=False):
+def get_dark_frames(dark_fits):
     """
-    Given a fits file containing dark integrations, this will identify and return
-    the first and second dark frames. If more than 2 dark integrations exist,
-    the 2nd through nth dark frame will be averaged to create the second dark.
-    If any resulting dark contains nans, it will be set to None. 
+    Given a fits file containing dark integrations, this will create a first
+    and second dark (or 0th and 1st if you will) based on what's in the file.
+    If only one frame, second is set to nan. If >2 frames, all those 2+ are 
+    averaged to form the second dark. 
 
     Parameters
     ----------
     dark_fits : astropy.io.fits instance
                 fits file containing dark integrations
-    average : boolean
-              if True, will return the average of the dark frames. Used for plots.
 
     Returns
     ----------
-    first_dark, second_dark : Arrays
-                             Dark frames contained within the observation.
-    OR
-    average dark : array
-                   Average of the two darks.
-
+    darks : 3D numpy ndarray
+            The same shape as the dark data product primary HDU, but forced to
+            have only 2 integrations.
     """
     n_ints_dark = get_n_int(dark_fits)
 
-    # Make a grand array to store the darks
+    # Make a grand array to store the darks - we only ever want 2 final.
     darks = np.empty((2, *dark_fits["Primary"].data.shape[-2:]))
 
     if n_ints_dark == 0:
@@ -1184,14 +1208,7 @@ def get_dark_frames(dark_fits, average=False):
         darks[0, :, :] = dark_fits['Primary'].data[0]
         darks[1, :, :] = np.nanmean(dark_fits['Primary'].data[1:, :, :], axis=0)
 
-    # Check that we don't have both frames full of NaN
-    if np.isnan(darks[0, :, :]).any() & np.isnan(darks[1, :, :]).any():
-        raise Exception("Both darks are bad")
-
-    if average is True:
-        return np.nanmean(darks, axis=0)
-    else:
-        return darks
+    return darks
 
 
 def pair_lights_and_darks(selected_l1a, dark_idx, verbose=False):
@@ -1350,6 +1367,132 @@ def make_dark_index(ech_l1a_idx):
     dark_idx = sorted(dark_idx, key=lambda i:i['datetime'])
     
     return dark_idx
+
+
+def get_corrupt_frames(light_fits):
+    """
+    Will loop across frames of a file, light_fits, and check if they are 
+    corrupted by bad commanding/MUV contamination/keyhole.
+    
+    Looks for a few common features of frames where the keyhole is bleeding through to determine if the frames are bad. 
+    Looks for the following criteria: 
+    0) a bright square at the top left of the detector image, by checking if its mean is > 5*median of a similar
+       patch in a region expected to be clean; 
+    1) a mean in the same region equal to at least 5*median of the whole frame, and 2*mean of the whole frame; 
+    2) mean in the first ~half of wavelength bins near the last spatial row is > 5*mean in the last ~half of wavelength bins
+       in the last spatial row;
+    3) mean in first 1/4 of wavelength bins on the slit is > 5*mean in last 1/4 of wavelength bins on the slit;
+    4) Same as item #3, but near the first spatial row on the detector image
+
+    The frame is marked as broken if
+    1) all criteria are True 
+    2) Criterion 0 is True, others are all False
+    3) Criterion 0 is False (no square detected) but all others are True
+
+    Parameters
+    ----------
+    light_fits : astropy.io.fits HDU instance
+                 Light file fits object
+    Returns
+    ----------
+    frame_corrupt : list
+                    Integration numbers of frames that are corrupt
+    
+    """
+    # Get the min/max spatial pixels
+    binscheme = iuvs.binning.get_binning_scheme(light_fits)
+
+    pixels_spa, trans_spa = iuvs.binning.get_bin_pix_boundaries(light_fits, "spatial")
+    spabins_leftedges = pixels_spa[np.where(trans_spa==1)]
+
+    # This is approximately where the keyhole tends to land on a badly 
+    # commanded file - this was determined by eye. :/
+    # TODO: this might not work for other binning modes....
+    spa1 = spabins_leftedges[-8]
+    spa2 = spabins_leftedges[-3]
+    _, spa1_clear = iuvs.miscellaneous.find_nearest(spabins_leftedges, spa1*0.85)
+    _, spa2_clear = iuvs.miscellaneous.find_nearest(spabins_leftedges, spa2*0.85)
+
+    # spectral region where keyhole tends to be, also by eye
+    pixels_spe, trans_spe = iuvs.binning.get_bin_pix_boundaries(light_fits, "spectral")
+    spebins_leftedges = pixels_spe[np.where(trans_spe==1)]
+    spe1 = spebins_leftedges[0]
+    spe2 = spebins_leftedges[21]
+    _, spe1_clear = iuvs.miscellaneous.find_nearest(spebins_leftedges, spebins_leftedges[-1]*0.75)
+    _, spe2_clear = iuvs.miscellaneous.find_nearest(spebins_leftedges, spebins_leftedges[-1]*0.75+40)
+
+    # Convert pixels to indices
+    ksa, ksb = iuvs.binning.pix_to_bin(light_fits, spa1, spa2, "spatial", return_npix=False)
+    kwa, kwb = iuvs.binning.pix_to_bin(light_fits, spe1, spe2, "spectral", return_npix=False)
+
+    # a spot that hopefully isn't contaminated
+    csa, csb = iuvs.binning.pix_to_bin(light_fits, spa1_clear, spa2_clear, "spatial", 
+                                                       return_npix=False)
+    cwa, cwb = iuvs.binning.pix_to_bin(light_fits, spe1_clear, spe2_clear, "spectral", 
+                                                       return_npix=False)
+
+    # Find a patch far from the edges that should be generally uncontaminated
+    # even if MUV has bled through
+    clean_patch =  light_fits['primary'].data[:, csa:csb, cwa:cwb]
+    median_clearpatch = np.nanmedian(clean_patch)
+    
+    slit_i1, slit_i2 = iuvs.echelle.get_ech_slit_indices(light_fits)
+    
+    corrupt_frames = []
+    
+    for f in range(iuvs.miscellaneous.get_n_int(light_fits)):
+        this_det_img = light_fits['primary'].data[f, :, :]
+
+        # Check for bright 'squares' that are the keyhole. This will catch
+        # frames where the keyhole but no MUV contamination appears.
+        criterion0 = False
+        mean_keyhole = np.nanmean(this_det_img[ksa:ksb, kwa:kwb]) # where it tends to appear.
+        # in the middle of detector-ish, hopefully a clear space
+        if mean_keyhole > 5*median_clearpatch:
+            criterion0 = True
+        
+        # Check for a high mean near the last spatial row. By eye, it looks 
+        # like the very last bin is normal, and ~ 5 bins in from the edge is a 
+        # good spot to check.
+        top_slice = this_det_img[ksa:ksb, :]
+        criterion1=False
+        if (np.nanmean(top_slice) > 5*np.nanmedian(this_det_img)) \
+            and (np.nanmean(top_slice) > 2*np.nanmean(this_det_img)):
+            criterion1=True
+
+        criterion2 = False
+        # check that mean, median in first half in spectral direction and near 
+        # last spatial row >> mean, median in last half near last spectral row
+        i_half = int(binscheme['nspe']/2)
+        if np.nanmean(top_slice[:, 0:i_half]) > 5*np.nanmean(top_slice[:, (i_half+1):]):
+            criterion2 = True
+    
+        # in the useful rows, check if mean in first quarter in wavelength 
+        # direction are >> the same values in the last quarter 
+        criterion3 = False
+        i_quarter = int(binscheme['nspe']/4)
+        slit_left = this_det_img[slit_i1:slit_i2, 0:i_quarter]
+        slit_nearright = this_det_img[slit_i1:slit_i2, -i_quarter:-1]
+        if np.nanmean(slit_left) > 5*np.nanmean(slit_nearright):
+            criterion3 = True     
+        
+        # Check that the same thing as the last check holds near first spatial row
+        criterion4 = False
+        bottom_left = this_det_img[0:slit_i2-int(slit_i2/2), 0:i_quarter]
+        bottom_nearright = this_det_img[0:slit_i2-int(slit_i2/2), -i_quarter:-1]
+        if np.nanmean(bottom_left) > 5*np.nanmean(bottom_nearright):
+            criterion4 = True
+
+        criteria = [criterion0, criterion1, criterion2, criterion3, criterion4]
+        # These are the possible ways for file to be bad. 
+        all_true = np.all(criteria)
+        first_true_rest_false = (criteria[0]==True and ~np.all(criteria[1:]))
+        first_false_rest_true = (criteria[0]==False and np.all(criteria[1:]))
+
+        if all_true or first_true_rest_false or first_false_rest_true:
+            corrupt_frames.append(f)
+
+    return corrupt_frames
 
 # Count rates ----------------------------------------------------------
 
@@ -1905,11 +2048,21 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     else:
         ints_to_fit = range(0, get_n_int(light_fits))
 
+    # Identify bad frames 
+    # =========================================================================
+    # Retrieve dark frame, ensuring 2 total frames. 
+    darks = get_dark_frames(dark_fits)
+
+    # Find bad darks
+    bad_darks = find_bad_dark_frames(darks)
+
+    # Get bad lights
+    i_badlights, _ = find_bad_light_frames(light_fits, bad_darks)
+
     # Dark subtraction
     # =========================================================================
-    dark_sub_data, _, i_bad = subtract_darks(light_fits, dark_fits, set_bad_frames_to_nan=True)
-    i_nanlights, i_badlights, i_lights_with_nandark, i_nandark = i_bad  # unpack indices of problematic frames
-    i_badframes = list(set(i_nanlights + i_badlights + i_lights_with_nandark))
+    dark_sub_data = subtract_darks(light_fits, darks, bad_darks, i_badlights, 
+                                   set_bad_frames_to_nan=True)
 
     # Artifact removal / outlier rejection
     # =========================================================================
@@ -1923,9 +2076,9 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     # ===============================================================================================
 
     spectrum, data_unc = flatten(light_fits, processed_data)
-    # For some reason, data uncertainties are still nonzero even if the frame 
-    # is broken, so turn them off here so they don't plot.. 
-    for fi in i_badframes: 
+    # For some reason, data uncertainties are still nonzero even if the frame
+    # is broken, so turn them off here so they don't plot..
+    for fi in i_badlights: 
         data_unc[fi, :] = 0
 
     # An alternate fit using a BU-style background
@@ -1964,8 +2117,8 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     
     # Do basic fit in DN
     I_fit, H_fit, D_fit, IPH_fit, fit_params, fit_uncertainties = fit_flat_data(light_fits, spectrum, data_unc, 
-                                                                                BU_bg=precalc_bg,
-                                                                                bad_frames=i_badframes, 
+                                                                                BU_bg=precalc_bg, fitter=fitter,
+                                                                                bad_frames=i_badlights, 
                                                                                 ints_to_fit=ints_to_fit,
                                                                                 return_each_line_fit=return_each_line_fit, 
                                                                                 **kwargs)
@@ -2225,6 +2378,10 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
     elif isinstance(ints_to_fit, int):
         ints_to_fit = [ints_to_fit]
 
+    # Set up a list of bad frames
+    if bad_frames is None:
+        bad_frames = []
+
     # Loop over integrations to do the fits
     for i in range(0, get_n_int(light_fits)):
 
@@ -2262,22 +2419,12 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         else:
             fit_params, I_fit, fit_1sigma, *_ = result_vec
 
-        # Set up bad frames tracker
-        if bad_frames is None: 
-            bad_frames = []
-
         # Handle case where frame is unusable and not caught by other logic
-        if (np.isnan(I_fit).all()) and (np.isnan(fit_params).all()):
+        if (np.isnan(I_fit).all()) and (np.isnan(fit_params).all()) and (i not in bad_frames):
             bad_frames.append(i)
 
         # Make a dictionary containing the results for fit parameters 
         # =====================================================================
-        
-        if i in bad_frames:
-            # If the frame is bad, we must manually provide some values so the 
-            # plots will still run if plots have been asked for.
-            fit_params = [0 for j in fit_params]
-            fit_1sigma = [0 for j in fit_1sigma]
 
         # Now make into dictionaries, excluding the max log likelihood since 
         # it's not included in the parameter names
@@ -2290,16 +2437,12 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         # way without this new logic, see:
         # mvn_iuv_l1a_outdisk-orbit02026-ech_20151014T174148, integration 4
         # mvn_iuv_l1a_inlimb-orbit04512-ech_20170125T190652, integration 19
-        if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]+D_offset) \
+        if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]+D_offset):
+            bad_frames.append(i)
+
+        if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]) \
             or (fit_params_dict["central_wavelength_H"] >= wavelengths[-1]):
             bad_frames.append(i)
-            fit_params_dict['total_brightness_D'] = np.nan
-            fit_unc_dict['unc_total_brightness_D'] = np.nan
-
-            if (fit_params_dict["central_wavelength_H"] <= wavelengths[0]):
-                # fit_params_dict['central_wavelength_H'] = np.nan
-                fit_params_dict['total_brightness_H'] = np.nan
-                fit_unc_dict['unc_total_brightness_H'] = np.nan
 
         # Package used affects what was done. Get it right
         if kwargs['fitter']=='scipy':
@@ -2321,15 +2464,15 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
        
         if i in bad_frames:
             fit_params_dict["failed_fit"] = True
+            for k in _fit_parameter_names:
+                fit_params_dict[k] = np.nan
+            for k in _unc_parameter_names:
+                fit_unc_dict[k] = np.nan
 
         # Append everything to lists, one entry for each integration
         I_fit_array[i, :] = I_fit
         fit_params_dicts.append(fit_params_dict)
         fit_unc_dicts.append(fit_unc_dict)
-
-        # Error control
-        if len(np.setdiff1d(np.where(np.isnan(fit_params)), _fit_parameter_IPH_idxs)) > 0:
-            print(f"Warning: Fit {i} has nans in fit parameters")
 
     if not return_each_line_fit:
         H_fit_array = None
@@ -2800,13 +2943,17 @@ def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, fitted_inte
     background_array_ph_s = convert_spectrum_DN_to_photoevents(light_fits, bg_fits) / (t_int)
 
     for i in fitted_integrations:
-        # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
-        popt, pcov = sp.optimize.curve_fit(background, wavelengths, background_array_ph_s[i, :],
-                                           p0=[121.567, 0, 0, 0],  # , 0],
-                                           bounds=([121.5, -np.inf, -np.inf, -np.inf],  # , -np.inf],
-                                                   [121.6, np.inf, np.inf, np.inf]))  # , np.inf]))
-        bg_ph_s = background(wavelengths, *popt)
-        bright_data_ph_per_s[i, :] = spec_ph_s[i, :] - bg_ph_s
+        if "failed_fit" not in fit_params[i].keys():
+            # The existing l1c files keep track of the spectra in "photons per second" (with bg subtracted) so we have to also
+            popt, pcov = sp.optimize.curve_fit(background, wavelengths, background_array_ph_s[i, :],
+                                            p0=[121.567, 0, 0, 0],
+                                            bounds=([121.5, -np.inf, -np.inf, -np.inf],
+                                                    [121.6, np.inf, np.inf, np.inf])) 
+            bg_ph_s = background(wavelengths, *popt)
+            bright_data_ph_per_s[i, :] = spec_ph_s[i, :] - bg_ph_s
+        else:
+            bright_data_ph_per_s[i, :] = np.full_like(spec_ph_s[i, :], np.nan)
+
 
     return bright_data_ph_per_s
 
