@@ -148,8 +148,8 @@ def plot_detector(data_to_plot, spapixrange, spepixrange,
         if prange is None:
             prange = [0, 100]
         if arange is None:
-            arange = [np.percentile(data_to_plot, prange[0]),
-                      np.percentile(data_to_plot, prange[1])]
+            arange = [np.nanpercentile(data_to_plot, prange[0]),
+                      np.nanpercentile(data_to_plot, prange[1])]
         
         if scale == "linear":
             norm = mpl.colors.Normalize(vmin=arange[0], vmax=arange[1])
