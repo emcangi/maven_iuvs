@@ -346,7 +346,7 @@ def downselect_data(index, channel="ech", light_dark=None, orbit=None, date=None
             selected = [entry for entry in selected if ((entry['orbit']==orbit) & (entry['orbit'] != "cruise")) ]
         elif type(orbit) is list:
             if orbit[1] == -1: 
-                orbit[1] = 99999 # MAVEN will die before this orbit number is reached
+                orbit[1] = 99999
 
             selected = [entry for entry in selected if orbit[0] <= entry['orbit'] <= orbit[1]]
 
@@ -426,7 +426,7 @@ def downselect_data(index, channel="ech", light_dark=None, orbit=None, date=None
 
     return selected
 
-# Relating to dark vs. light observations -----------------------------
+# Relating to building and accessing the light/dark pair key file -------------
 def get_dark_from_keyfile(light_filename, keydf):
     """
     Retrieve the dark associated with light_filename from keyfile csv.
@@ -588,7 +588,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
         key_rev = key_name.split('.fits.gz')[0][-3:]
         disk_rev = disk_name.split('.fits.gz')[0][-3:]
 
-        if (key_rev != disk_rev): 
+        if (key_rev != disk_rev):
             # Whether disk revision is higher than key
             disk_rev_newer = r_s.index(disk_rev[0]) > r_s.index(key_rev[0])
             rev_eq = r_s.index(disk_rev[0]) == r_s.index(key_rev[0])
@@ -1640,8 +1640,10 @@ def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None):
     # NEW: UPDATE WITH MISSING INFO - don't run on new index, just on existing entries
     print(f"Now updating existing entries...")  
     new_idx, added_keys, added_geom = update_metadata_file(the_dir, new_idx, geospatial=geospatial)
-    if added_keys != 0 or added_geom != 0:
-        print(f"Updated the metadata index:\n\tmissing keys added to {added_keys} files\n\tgeometry summary added to {added_geom} files")
+    if (added_keys != 0) or (added_geom != 0):
+        print(f"Updated the metadata index:\n\t" +
+              f"missing keys added to {added_keys} files\n\t" +
+              f"geometry summary added to {added_geom} files\n\t")
     else:
         print("No entry updates needed")
 
@@ -1849,6 +1851,7 @@ def update_index(rootpath, geospatial=False, new_files_limit_per_run=1000):
     """
     Updates the index file for rootpath, where the index file has the form 
     <rootpath>_metadata.npy.
+    TODO: Probably should rename something like 'add new files to index'
     
     Parameters
     ----------
@@ -1954,10 +1957,11 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                        calibration="new", ints_to_fit="all", remove_artifacts=True,
                        save_arrays=False, place_for_arrays=None, 
                        return_each_line_fit=True, 
-                       use_BU_bg=False,
+                       use_BU_bg=False, fitter='dynesty', 
                        do_BU_background_comparison=False, 
                        run_writeout=True, overwrite=False, make_plots=True, 
-                       idl_process_kwargs = {"open_idl": False, "proc": None, 
+                       idl_process_kwargs = {"open_idl": False, 
+                                             "proc": None, 
                                              "stderr_queue": None, 
                                              "stderr_thread": None},
                        clean_data_kwargs = {"clean_method": "new", 
@@ -2300,7 +2304,7 @@ _fit_parameter_background_idxs = [i for i, name in enumerate(_fit_parameter_name
 _fit_parameter_non_background_idxs = np.setdiff1d(range(0, len(_fit_parameter_names)), _fit_parameter_background_idxs)
 
 
-def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
+def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynesty",
                   calibration="new", return_each_line_fit=True, ints_to_fit="all",
                   BU_bg=np.nan, **kwargs):
     """
@@ -2409,7 +2413,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
         fit_IPH_component = check_whether_IPH_fittable(mean_mrh, i)
 
         result_vec = fit_H_and_D(initial_guess, wavelengths, spectrum[i, :], light_fits, theCLSF, unc=data_unc[i, :], \
-                                 BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, **kwargs)
+                                 BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, fitter=fitter, **kwargs)
 
         if return_each_line_fit:
             fit_params, I_fit, fit_1sigma, H_fit, D_fit, IPH_fit = result_vec
@@ -2445,9 +2449,9 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None,
             bad_frames.append(i)
 
         # Package used affects what was done. Get it right
-        if kwargs['fitter']=='scipy':
+        if fitter=='scipy':
             fit_params_dict['maxLL'] = fit_params[-1] * -1 
-        elif kwargs['fitter']=='dynesty':
+        elif fitter=='dynesty':
             fit_params_dict['maxLL'] = fit_params[-1]
 
         # Compute chi squared
@@ -3215,7 +3219,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
         try:
             # Some methods return the inverse hessian already.
             fit_uncert = np.sqrt(np.diag(bestfit.hess_inv))
-        except Exception as y:
+        except Exception:
             if not hush_warning:
                 print(f"Warning: algorithm {solver} doesn't return an " \
                        "inverse hessian. The uncertainties will be estimated" \
