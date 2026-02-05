@@ -3749,13 +3749,17 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
                                  )
     
     # Save the output to some temporary files that will be saved outside the Python module.
-    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
-    brightness_and_linectr_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
-    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False)
+    all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False,
+                                                  delete_on_close=False)
+    brightness_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv',
+                                                    delete=False,
+                                                    delete_on_close=False)
+    ph_per_s_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False, 
+                                                  delete_on_close=False)
     
     # Collect the names for use 
     all_fits_csv_path = all_fits_csv_tf.name
-    brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
+    brightness_and_linectr_csv_path = brightness_csv_tf.name
     ph_per_s_csv_path = ph_per_s_csv_tf.name
     
     # Have to make a different value for NaN for IDL
