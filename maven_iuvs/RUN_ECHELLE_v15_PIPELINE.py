@@ -26,15 +26,18 @@ if project_dir in sys.path:
 import maven_iuvs as iuvs # look, idk why, but it breaks if this isn't here.
 from maven_iuvs.download import get_default_data_directory
 from maven_iuvs.echelle import get_dir_metadata, find_files_with_geometry, \
-     downselect_data, convert_l1a_to_l1c, get_dark_from_keyfile
-from maven_iuvs.miscellaneous import orbit_folder
+     downselect_data, convert_l1a_to_l1c, get_dark_from_keyfile, \
+     pipe_processer, command_IDL_and_verify_done
+from maven_iuvs.miscellaneous import orbit_folder, iuvs_orbno_from_fname, \
+    iuvs_filename_to_datetime, iuvs_segment_from_fname
 
 # ARG PARSE 
 # =============================================================================
+# Orbit arguments are optional IFF you have specified specific files to fit.
 parser = argparse.ArgumentParser(description='Orbits to process to v15')
-parser.add_argument('start_orb', type=int, 
+parser.add_argument('start_orb', type=int, nargs='?',
                     help='Start orbit (multiple of 100)')
-parser.add_argument('end_orb', type=int, 
+parser.add_argument('end_orb', type=int, nargs ='?',
                     help='End orbit (multiple of 100) -- will not be included')
 
 args = parser.parse_args()
@@ -142,6 +145,8 @@ def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock,
     ----------
     None
     """
+    # Process the observation: Do the fitting, construct the IDL command,
+    # put the command in the IDL queue (this happens deep within, in writeout_l1c)
     result = process_observation(obs_md, orbfold, ldkey, process_timestamp,
                                  make_plots=make_plots, overwrite=overwrite,
                                  save_arrays=save_arrays, fitter=fitter, writeout=writeout,
@@ -152,7 +157,25 @@ def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock,
 
 
 def _record_result(obs_md, result, shared_results, lock):
-    """Thread/process‑safe update of the shared result dict."""
+    """
+    Add the metadata dictionary for a particular observation to the shared 
+    manager dictionary, so results can be written out later
+
+    Parameters
+    ----------
+    obs_md : dictionary
+             Dictionary containing observation metadata for a particular observation
+    result : string
+             Short description of the result of processing the file
+    shared_results : dictionary
+                     manager Dictionary that stores sorted metadata dicts
+    lock : lock object
+           prevents race conditions on the dictionaries
+    
+    Results
+    ----------
+    n/a
+    """
     with lock:
         if "OK" in result:
             shared_results['OK'] = shared_results['OK'] + [obs_md]
@@ -165,48 +188,26 @@ def _record_result(obs_md, result, shared_results, lock):
             shared_results['other_log'] = shared_results['other_log'] + [f"{result}"]
 
 
-def tee_reader(pipe, log_path: str, out_queue: queue.Queue | None = None):
-    """
-    Reads line‑by‑line from ``pipe`` (stdout or stderr),
-    writes each line to ``log_path`` and optionally puts the line
-    into ``out_queue``.
-    """
-    with open(log_path, "a", encoding="utf-8") as f:
-        for line in iter(pipe.readline, ""):          # blocks until a line or EOF
-            f.write(line)
-            f.flush()
-            if out_queue is not None:
-                out_queue.put(line)                   # non‑blocking (unbounded queue)
-    pipe.close()                                  # signal EOF to the producer
-
-
-def phrase_watcher(src_queue: queue.Queue,
-                   phrase: str,
-                   found_event: threading.Event,
-                   stop_event: threading.Event):
-    """
-    Consumes ``src_queue`` until ``phrase`` is observed or ``stop_event`` is set.
-    When the phrase is found, ``found_event`` is set and the function returns.
-    """
-    while not stop_event.is_set():
-        try:
-            # Use a short timeout so we can react to ``stop_event`` promptly.
-            line = src_queue.get(timeout=0.2)
-        except queue.Empty:
-            continue
-
-        if phrase in line:
-            found_event.set()
-            # We still drain the queue so the tee_reader can finish cleanly.
-            # (Otherwise the queue could fill up and block the tee_reader.)
-            while not src_queue.empty():
-                src_queue.get_nowait()
-            break
-
-
 def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path, 
                idl_errlog_path):
-    """does the heavy lifting."""
+    """
+    Main target of the Process object: writes commands to the IDL subprocess.
+    
+    Parameters
+    ----------
+    idl_cmd_q : manager.Queue() instance 
+                Collects and distributes the commands to be written to the IDL
+                subprocess.
+    idl_pipeline_dir : string
+                       Location of the IDL scripts
+    idl_outlog_path,  
+    idl_errlog_path : string(s)
+                      Paths to logs of IDL output and errors
+
+    Returns 
+    ----------
+    n/a
+    """
     os.chdir(idl_pipeline_dir)
     
     # Open the IDL process
@@ -217,49 +218,34 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
                             text=True, bufsize=1)
 
     # Start a queue for stderr so we can watch for script compilation success
+    # This queue can be a basic queue because it's not shared between processes
     err_queue = queue.Queue()
 
     # start stderr thread that keeps track of IDL output
-    errlog_thread = threading.Thread(target=tee_reader, 
+    stderr_thread = threading.Thread(target=pipe_processer, 
                                      args=(proc.stderr, idl_errlog_path, err_queue), 
                                      daemon=True)
-    errlog_thread.start()
+    stderr_thread.start()
 
-    outlog_thread = threading.Thread(target=tee_reader, 
+    stdout_thread = threading.Thread(target=pipe_processer, 
                                      args=(proc.stdout, idl_outlog_path), 
                                      daemon=True)
-    outlog_thread.start()
+    stdout_thread.start()
 
 
-    # Watcher that listens for script compilation success --------------------------------------------
-    compile_phrase = "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON."
-    compiled_evt = threading.Event()
-    stop_watcher_evt = threading.Event()
-    compile_watcher = threading.Thread(
-        target=phrase_watcher,
-        args=(err_queue, compile_phrase, compiled_evt, stop_watcher_evt),
-        daemon=True,
-    )
-    compile_watcher.start()
+    # Compile the l1c writeout script, make sure it's ready -------------------
+    # Set up a queue watcher to listen for script compilation success
+    compiled_msg = "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON."
+    compile_cmd = ".com write_l1c_file_from_python.pro\n"
+    command_IDL_and_verify_done(err_queue, proc, compile_cmd, compiled_msg)
 
-    # compile script
-    proc.stdin.write(".com write_l1c_file_from_python.pro\n")
-    proc.stdin.flush()
-
-    compile_timeout = 3
-    if not compiled_evt.wait(timeout=compile_timeout):
-        stop_watcher_evt.set()
-        raise TimeoutError(f"Compile phrase not seen within {compile_timeout}s")
-
-    # Token found – we can stop the watcher cleanly
-    stop_watcher_evt.set()
-    compile_watcher.join(timeout=1)
-
-    # ------------------------------------------------------------------------------
-                    
+    # -------------------------------------------------------------------------
+    # Now that the script is ready, IDL will collect commands and run them           
     try:
         while True:
+            # Get a command from the queued list of commands and write it to IDL
             item = idl_cmd_q.get()
+            # the item None indicates we are done for now
             if item is None:
                 break
             proc.stdin.write(item.rstrip("\n") + "\n")
@@ -269,8 +255,8 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
         proc.wait()
     
         # Wait for the reader thread to drain any remaining output
-        outlog_thread.join(timeout=2)
-        errlog_thread.join(timeout=2)
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
 
 
 # SET UP LOOP 
@@ -284,115 +270,95 @@ def main():
     fitter = "dynesty" # "dynesty"
     binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
                     # Had to do this at one point due to an IDL problem.
+    segment = None #"outlimb"
     if binning=="nonlinear":
         print("WARNING! Only running nonlinear files! Is that what you wanted?")
     reportext = ""  # Extra text to append to procesisng report filename
     overwrite = True
     idl_process_kwargs = {}
+    # You can fill in this list if you just have a few specific files to run
+    specific_files = []
 
 
     # STARTING VERSION AND FOLDER DECLARATION
-    # =============================================================================
+    # =========================================================================
     v = "v14"
     which_l1a = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
-    # DO_FMR = True
-    # DO_DISK = False
-    # DO_LIMB = False
-    # DO_PERI = False
-    # DO_CLEANUP_TEST = False
 
     IUVS_FOLD = "/home/emc/Insync/OneDrive-CU/Research/IUVS/"
     IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
     # L1c base 
     IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
-    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Dynesty/"
-                # "l1c_ech_data/disk_survey_ls200-300/v15/" # for disk
-            # "l1c_ech_data/Limb_v15/" # for writing new files of record
-            # "l1c_ech_data/test_old_cleanup/v15/" # for testing outlier rejection effects
-            # "l1c_ech_data/susfile_fits/v15/" #  for limb
-
-    keyname = "MASTER_LIGHT_DARK_KEY_v14.csv"
+    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Replacement_Files/"
+                # Replacement_Files # Dir for redoing files that produced 
+                #                    false positives
+                # Dynesty_AWS2 # most recent dir.
+                # Dynesty # original results, full of writeout errors.
+    
+    # LOAD LIGHT/DARK PAIR CSV
+    # =========================================================================
+    keyname = f"MASTER_LIGHT_DARK_KEY_{v}.csv"
             #input("Please type name of light/dark key to use with .csv: ")
     PF = "/home/emc/GITREPOS/maven_iuvs/maven_iuvs/ancillary/" + keyname
 
-    # LOAD LIGHT/DARK PAIR CSV
-    # =============================================================================
     print("Loading light/dark pair CSV")
     ld_pairs = pd.read_csv(PF, delimiter=",", header=0)
     if ld_pairs.empty:
         raise KeyError("dataframe is empty for some reason")
 
     # LOAD INDICES
-    # =============================================================================
+    # =========================================================================
     ech_l1a_idx = get_dir_metadata(get_default_data_directory(which_l1a[v]),
                                 geospatial=True)
-    # dark_idx = make_dark_index(ech_l1a_idx)
 
     # Find geometry files
     lights_with_geom = find_files_with_geometry(ech_l1a_idx)
 
     # SELECT DATA
-    # =============================================================================
-    # if DO_FMR: 
+    # =========================================================================
     clean_kwargs = {}
     metadata_lists = []
-    orbit_folders_to_run =  list(range(args.start_orb, args.end_orb, 100))
+    if not specific_files:
+        if args.start_orb is None or args.end_orb is None:
+            raise ValueError("Error: Please specify start and end orbits or " \
+                             "specific files to run")
+        orbit_folders_to_run =  list(range(args.start_orb, args.end_orb, 100))
+    else:
+        orbit_folders_to_run = list(set([int(iuvs_orbno_from_fname(f) - (iuvs_orbno_from_fname(f) % 100) )
+                                for f in specific_files]))
+    print(f"Running orbit folders {orbit_folders_to_run}")
 
     for so in orbit_folders_to_run:
-        metadata_lists.append(downselect_data(lights_with_geom,
-                                            light_dark="light",
-                                            binning=binning,
-                                            orbit=[so, so+99]
-                                            )
-                            )
+        # Select the files for each orbit folder
+        if not specific_files:
+            metadata_lists.append(downselect_data(lights_with_geom,
+                                                  light_dark="light",
+                                                  binning=binning,
+                                                  segment=segment,
+                                                  orbit=[so, so+99]
+                                                 )
+                                )
+        else:
+            files_this_orbit_block = downselect_data(lights_with_geom, 
+                                                     light_dark="light",
+                                                     binning=binning, 
+                                                     orbit=[so, so+99])
+            metadata_lists.append([f for f in files_this_orbit_block \
+                                   if f['name'] in specific_files])
+            
+
         # Create the folder so we can open IDL 
         if not os.path.isdir(L1C_DIR + f'orbit{so:05}'):
             makeme = L1C_DIR + f'orbit{so:05}/'
             os.mkdir(makeme)
-    # elif DO_LIMB:
-    #     clean_kwargs = {}
-    #     limbdata_temp = downselect_data(lights_with_geom, light_dark="light", 
-    #                                     segment="limb", 
-    #                                     orbit=[7700, 8000])
-    #     all_metadata = [l for l in limbdata_temp if 'bintbl' not in l['binning']] 
-    #     # all_metadata = np.load(IUVS_FOLD + "notebooks/susfiles_v15.npy",
-    #     #                        allow_pickle=True).item()['ss']
-    # elif DO_DISK:
-    #     clean_kwargs = {}
-    #     # select randomly throughout mission, but using different segments:
-    #     # diskdata = downselect_data(ech_l1a_idx, light_dark="light",
-    #     #                            segment="disk", ls=[200, 300])
-    #     # print(len(diskdata))
-    #     # trimit = input("Trim down the disk data? (y/n)")
-    #     # if trimit=="y":
-    #     #     stepsz = int(input("Enter step size: "))
-    #     #     all_metadata = diskdata[::stepsz]
-    #     # all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
-    #     all_metadata = np.load(IUVS_FOLD + "notebooks/crossmission_diskdata.npy",
-    #                         allow_pickle=True)
-    # elif DO_PERI:
-    #     clean_kwargs = {}
-    #     peridata = downselect_data(ech_l1a_idx, light_dark="light", 
-    #                             segment="periapse", ls=[200, 300])
-    #     print(len(peridata))
-    #     trimit = input("Trim down the peri data? (y/n)")
-    #     if trimit=="y":
-    #         stepsz = int(input("Enter step size: "))
-    #         all_metadata = peridata[::stepsz]
-    #     all_metadata = [l for l in all_metadata if 'bintbl' not in l['binning']]
-    # elif DO_CLEANUP_TEST:
-    #     clean_kwargs = {"clean_method": "old"}
-    #     all_metadata = downselect_data(ech_l1a_idx, light_dark="light",
-    #                             segment="outlimb", 
-    #                             date=datetime.datetime(2020, 9, 26, 20, 45, 28),
-    #                             orbit=12430
-    #                             )
 
     print(f"Total files to process: {sum([len(m) for m in metadata_lists])}")
 
     # get date time here because it's hard to do in IDL
     process_timestamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
 
+    # Set up a multiprocessing context. Spawn is safest, each child process
+    # inherits only what's necessary to run the target (idl_writer).
     ctx = mp.get_context("spawn")
 
     with ctx.Manager() as manager:
@@ -409,25 +375,32 @@ def main():
             # Get files to process for this orbit: list of dictionaries
             obs_to_process = metadata_lists[i]
                 
-            # IDL 
+            # IDL
             # =============================================================================
             if DO_WRITEOUT: 
                 print("Opening IDL and loading the MAVEN environment")
                 
-                # Set up queues for IDL: queue for calling the writeout script
+                # Managed queue to store 'process the file commands', which 
+                # will be sent to the IDL subprocess. Managed because many
+                # workers have to be able to write to the queue and we need to 
+                # avoid race conditions.
                 idl_cmd_q = manager.Queue()
 
-                # Set up the output log path 
+                # Set up the log paths to keep track of high-level output and
+                # errors from IDL. o/eln = "output/error log name"
                 oln = this_orbfold + f"IDLoutput_{startorb}-{startorb+100}.txt"
                 eln = this_orbfold + f"IDLerrors_{startorb}-{startorb+100}.txt" 
 
-                # Start the writer process
+                # Start the main Process object: it calls the function idl_writer,
+                # which writes commands to the IDL subprocess
                 IDLwriter = ctx.Process(target=idl_writer,
                                         args=(idl_cmd_q, 
-                                            ["stdbuf", "-oL", "-eL", "idl", "-quiet"], # IDL launch command
-                                            IDL_FOLD,
-                                            oln,
-                                            eln))   
+                                              # Arguments for launchign IDL, 
+                                              # required to make it work in a 
+                                              # subprocess.
+                                              ["stdbuf", "-oL", "-eL", "idl", "-quiet"], 
+                                              IDL_FOLD,
+                                              oln, eln))  
                 IDLwriter.start()
 
                 idl_process_kwargs={"open_idl": False,
@@ -435,34 +408,43 @@ def main():
             else:
                 print("File writeout not requested, IDL will not be opened")
 
-            # make a shared dict
+            # The Manager also has to keep a dictionary of high-level results
+            # for each file so that the outcome can be logged by Python
             resdict_thisorb = manager.dict({"OK": [], "no_light": [], 
                                             "no_dark": [], "other": [], 
                                             "other_log": []})
-            lock = manager.Lock()
             
+            # Create a lock to use with the dictionary: Locks prevent mangling
+            # because multiple processes will be using the same object. 
+            # See Programming Guidelines for multiprocessing: 
+            # "Do not use a proxy object from more than one thread unless you 
+            # protect it with a lock."
+            # https://docs.python.org/3/library/multiprocessing.html#multiprocessing-programming
+            lock = manager.Lock()
 
             # PROCESS *ALL* THE FILES!!!!!
-            with ctx.Pool(processes=os.cpu_count()) as pool:
+            with ctx.Pool(processes=os.process_cpu_count()) as pool:
+                # Map iterable tasks to the workers; starmap is used because 
+                # multiple arguments to obs_worker are required.
                 pool.starmap(obs_worker, 
-                            [(process_timestamp, obs, this_orbfold, ld_pairs, 
-                              resdict_thisorb, lock, idl_process_kwargs, 
+                            [(process_timestamp, obs, this_orbfold, ld_pairs,
+                              resdict_thisorb, lock, idl_process_kwargs,
                               clean_kwargs, make_plots, overwrite, save_arrays,
                               fitter, DO_WRITEOUT)
                             for obs in obs_to_process]
                             )
                 idl_cmd_q.put(None) # Tell the queue sentinel to quit
                 pool.close()
-                pool.join() 
+                pool.join()
             
-            # Once finished, end the queues for the logs and quit the writer 
+            # Once finished, end the queues for the logs and quit the writer
             if DO_WRITEOUT:
                 IDLwriter.join()
 
             # Calculate problems that we had
             total_probs = len(resdict_thisorb['no_light']) + \
-                        len(resdict_thisorb['no_dark']) + \
-                        len(resdict_thisorb['other'])
+                          len(resdict_thisorb['no_dark']) + \
+                          len(resdict_thisorb['other'])
             
             # Set up the log file 
             finish_time_str = datetime.datetime.now().strftime('%Y-%m-%d')
@@ -496,14 +478,6 @@ def main():
 
             print(f"Finished {startorb}--{startorb+100}\n\n\n\n\n")
 
-            # the idl error log is in the parent l1c folder, copy it into the proper subfolder.
-            # then blank it out
-            # os.system(f"cp '{eln}' '{this_orbfold + eln}'" )
-            # open(L1C_DIR+eln, 'w').close()
-
-            # Close IDL as it needs to get regularly reopened
-            # if DO_WRITEOUT:
-            #     idlproc.terminate()
 
 if __name__ == "__main__":
     main()

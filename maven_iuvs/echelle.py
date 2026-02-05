@@ -2193,7 +2193,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     if run_writeout:
         assert process_timestamp is not None
-        IDL_status = writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
+        IDL_status = prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
                                   fit_params_kR, fit_unc_kR, 
                                   I_fit_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, 
                                   IPH_fit_kR_pernm, bgs_kR_pernm, 
@@ -3599,7 +3599,7 @@ def predict_IPH_linecenter(light_fits):
 
 # Write out with IDL ==========================================================
 
-def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
+def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
                  fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
                  spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
                  process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
@@ -3764,62 +3764,26 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     bright_data_ph_per_s_df.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
     fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
     
-    # Now call IDL
+    # Now either call IDL or write to the command queue
+    # =========================================================================
+    # Following block used when multiprocessing is not being run
+    idl_command = f"write_l1c_file_from_python, '{light_l1a_path}', \
+                  '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
+                  '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
+                  '{ph_per_s_csv_path}'\n"
     if cmd_queue is None:
-        # Mostly used when processing just a few files and not running IDL at a higher level.
         if open_idl is True:
-            proc, stderr_queue, stderr_thread = open_IDL_and_compile_writeout_script(l1c_savepath)
-
-        # IDL has been opened at a higher level and the process passed in
-        output_log = l1c_savepath + "IDLoutput.txt"
-
-        # Create queue and thread to track the stdout
-        stdout_queue = queue.Queue()
-        stdout_thread = threading.Thread(target=start_reader, args=(proc.stdout, 
-                                                                    stdout_queue, 
-                                                                    output_log), 
-                                                            daemon=True)
-        stdout_thread.start()
-
-        # Send IDL write command
-        proc.stdin.write(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                        '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
-                        '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                        '{ph_per_s_csv_path}'\n")
-        proc.stdin.flush()
-        time.sleep(1)
-
-        # Check that files have been created 
-        target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
-        target_l1c_fullpath = l1c_savepath + target_l1c_filename
-        target_fits = Path(target_l1c_fullpath)
-        target_xml = Path(target_l1c_fullpath[:-16] + ".xml")
-        file_process_success = f"IDL finished {target_l1c_filename}"
-
-        if (target_fits.is_file() and target_xml.is_file()) or check_for_success_msg(stdout_queue, file_process_success):
-            print(f"File and label writeout succeeded")
-            returnval = "IDL OK"
-        else:
-            print(f"Python detects that an error occurred in IDL")
-            returnval = "IDL error"
-
-        # Make sure stdout queue is clear between calls I think?
-        with stdout_queue.mutex:
-            stdout_queue.queue.clear()
-        
-        return returnval
-    
+            returnval = writeout_with_IDL(l1c_savepath, light_l1a_path,
+                                          idl_command)
+            return returnval
     # Multiprocessing usage
     else: 
-        cmd_queue.put(f"write_l1c_file_from_python, '{light_l1a_path}', \
-                     '{dark_l1a_path}', '{l1c_savepath}', '{process_timestamp}', \
-                     '{all_fits_csv_path}', '{brightness_and_linectr_csv_path}', \
-                     '{ph_per_s_csv_path}'\n", timeout=3)
+        cmd_queue.put(idl_command, timeout=3)
         return "IDL OK"
 
 
-def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt",
-                                         start_stderr_q_and_thread=True):
+def writeout_with_IDL(l1c_savepath, light_l1a_path, process_file_command, 
+                      errlogname="IDLerrors.txt"):
     """
     Opens IDL with subprocess, and starts a thread to monitor the output to 
     check for when the script to writeout files in IDL has been compiled.
@@ -3838,13 +3802,15 @@ def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt
                    Lets content be read from the pipe while it's also written 
                    out to a log. 
     stderr_thread : threading.Thread() instance
-                    with start_reader(), keeps track of output from IDL to 
+                    with pipe_processer(), keeps track of output from IDL to 
                     watch for the key message to tell when script is compiled
     """
     print("Opening IDL")
     os.chdir(idl_pipeline_dir)
     
+    # Log filenames
     err_log = l1c_savepath + errlogname
+    output_log = l1c_savepath + "IDLoutput.txt"
 
     proc = subprocess.Popen(["stdbuf", "-oL", "-eL", "idl", "-quiet"],
                             stdin=subprocess.PIPE,
@@ -3852,88 +3818,150 @@ def open_IDL_and_compile_writeout_script(l1c_savepath, errlogname="IDLerrors.txt
                             stderr=subprocess.PIPE,
                             text=True, bufsize=1)
     
-    if start_stderr_q_and_thread:
-        stderr_queue = queue.Queue()
-        
-        # Start background readers
-        stderr_thread = threading.Thread(target=start_reader, 
-                                         args=(proc.stderr, stderr_queue, err_log), 
-                                         daemon=True)
-        stderr_thread.start()
-
-    proc.stdin.write(".com write_l1c_file_from_python.pro\n")
-    proc.stdin.flush()
-
-    if check_for_success_msg(stderr_queue, "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON.", timeout=8):
-        print("Compiled write_l1c_file_from_python.")
-    else:
-        print("Compile failed.")
+    # Set up queue and thread for stderr, so we can  watch for the compile phrase
+    stderr_queue = queue.Queue()
     
-    return proc, stderr_queue, stderr_thread
+    # Start background readers
+    stderr_thread = threading.Thread(target=pipe_processer, 
+                                        args=(proc.stderr, err_log, stderr_queue), 
+                                        daemon=True)
+    stderr_thread.start()
+
+    # Compile the script and check 
+    compile_command = ".com write_l1c_file_from_python.pro\n"
+    compiled_success_msg = "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON."
+    command_IDL_and_verify_done(stderr_queue, proc, compile_command, compiled_success_msg)
+
+    # Create queue and thread to track the stdout, which watches to see that the
+    # file was successfully processed
+    stdout_queue = queue.Queue()
+    stdout_thread = threading.Thread(target=pipe_processer, args=(proc.stdout, 
+                                                                  output_log,
+                                                                  stdout_queue
+                                                                ), 
+                                    daemon=True)
+    stdout_thread.start()
+
+    # Check that files have been created 
+    target_l1c_filename = (light_l1a_path.split('/')[-1]).replace('v14', 'v15').replace('l1a', 'l1c')
+    process_file_success_msg = f"IDL finished {target_l1c_filename}"
+    command_IDL_and_verify_done(stdout_queue, proc, process_file_command, 
+                                process_file_success_msg, timeout=5)
+
+    # Make sure stdout queue is clear between calls I think / prevent race condition
+    with stdout_queue.mutex:
+        stdout_queue.queue.clear()
+    
+    # Wait for the reader thread to drain any remaining output
+    stdout_thread.join(timeout=2)
+    stderr_thread.join(timeout=2)
+    
+    return "OK"
 
 
-def start_reader(pipe, output_queue, log_file_path):
+def command_IDL_and_verify_done(q, proc, command_to_stdin, success_message,
+                                timeout=5):
     """
-    Continuously read from a pipe (stdout or stderr), line by line,
-    writing to a queue and logging to a file.
+    Sets up a watcher of IDL output, compiles script, and checks that 
+    success message occurred.
 
     Parameters
     ----------
-    pipe : subprocess.pipe instance
-           Intended to accept the proc.stderr 
-    output_queue : Queue() instance
-                keeps track of IDL output while also allowing it to be written out to a file
-    log_file_path : string
-                    name of log file to which to write IDL output
-    
+    q : queue.Queue() instance
+            captures output of stderr or stdout
+    proc : subprocess.Process() instance
+            Governs stdin.
+    success_message : string
+                      message output from IDL to watch for as a trigger for 
+                      when to continue
+    timeout : int
+              sec to wait before declaring failed detection of success_message
+    Returns
+    ----------
+    n/a
+    """
+    # compiled_msg = 
+    message_detected = threading.Event()
+    stop_watcher_evt = threading.Event()
+    watch_for_msg = threading.Thread(target=message_watcher,
+                                            args=(q, success_message, 
+                                                    message_detected, 
+                                                    stop_watcher_evt),
+                                                    daemon=True)
+    watch_for_msg.start()
+
+    # compile script
+    proc.stdin.write(command_to_stdin)
+    proc.stdin.flush()
+
+    if not message_detected.wait(timeout=timeout):
+        stop_watcher_evt.set()
+        raise TimeoutError(f"Expected message {success_message} not seen within {timeout}s")
+
+    # Token found – we can stop the watcher cleanly
+    stop_watcher_evt.set()
+    watch_for_msg.join(timeout=1)
+
+
+def pipe_processer(pipe, log_path: str, out_queue: queue.Queue | None = None):
+    """
+    Reads from a subprocess pipe object, writes it to a file for logging, 
+    and also places the message on a queue.Queue() so that certain trigger
+    messages produced by IDL can be found and Python can do something in response
+
+    Parameters
+    ----------
+    pipe : stdout or stderr 
+           Pipe object from a subprocess instance
+    log_path : string
+               File in which to log messages from the pipe 
+    out_queue : queue.Queue() instance
+                Queue which can store copies of messages from the pipe
+
     Returns
     ----------
     none
     """
-    with open(log_file_path, 'a', encoding='utf-8') as log_file:
-        for line in iter(pipe.readline, ''):
-            log_file.write(line)
-            log_file.flush()
-            output_queue.put(line.rstrip())
+    with open(log_path, "a", encoding="utf-8") as f:
+        for line in iter(pipe.readline, ""): # blocks until a line or EOF
+            f.write(line)
+            f.flush()
+            if out_queue is not None:
+                out_queue.put(line) # non‑blocking (unbounded queue)
+    pipe.close() # signal EOF to the producer
 
-    pipe.close()
 
-
-def check_for_success_msg(output_queue, target_phrase, timeout=10):
+def message_watcher(src_queue: queue.Queue, message: str,
+                    message_detected: threading.Event,
+                    stop_watching: threading.Event):
     """
-    Read lines from a queue until the last one matches the target_phrase.
-    Times out after `timeout` seconds.
-
     Parameters
     ----------
-    output_queue : Queue() instance
-                keeps track of IDL output for reading while also allowing it to be written to file
-    target_phrase : string
-                    Key phrase to look for in IDL output to tell when a certain milestone has been achieved.
-    timeout : int
-            Time in seconds after which to give up waiting.
+    src_queue : queue.Queue() instance
+                queue to watch for a specific message to appear
+    message : string
+              Trigger message that will set found_event()
+    message_detected : threading.Event()
+                       unset while phrase hasn't appeared yet, set once it has
+    stop_watching : threading.Event()
+                    set once phrase is detected
     Returns
     ----------
-    boolean - whether the goal is achieved
+    n/a
     """
-    start_time = time.time()
-    buffer = []
-
-    while True:
+    while not stop_watching.is_set():
         try:
-            line = output_queue.get(timeout=0.1)
-            buffer.append(line)
+            # Use a short timeout to detect stop_watching promptly
+            line = src_queue.get(timeout=0.2)
         except queue.Empty:
-            pass
+            continue
 
-        # Break if time exceeded
-        if time.time() - start_time > timeout:
-            print("Timeout waiting for phrase.")
-            return False
-
-        # If buffer is not empty and last line matches
-        if buffer and buffer[-1].strip() == target_phrase:
-            return True
+        if message in line:
+            message_detected.set()
+            # Ensure queue is empty
+            while not src_queue.empty():
+                src_queue.get_nowait()
+            break
         
 
 def compute_ph_per_s_data(light_fits, spectrum, fit_params, bg_fits, fitted_integrations):
