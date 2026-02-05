@@ -3758,11 +3758,6 @@ def writeout_l1c(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
     brightness_and_linectr_csv_path = brightness_and_linectr_csv_tf.name
     ph_per_s_csv_path = ph_per_s_csv_tf.name
     
-    print(f"fits path: {all_fits_csv_path}")
-    print(f"brightness path: {brightness_and_linectr_csv_path}")
-    print(ph_per_s_csv_path)
-
-    
     # Have to make a different value for NaN for IDL
     narep = -9999
     brightness_and_linectr_df.to_csv(brightness_and_linectr_csv_path, index=False, na_rep=narep)
