@@ -1452,6 +1452,10 @@ def get_corrupt_frames(light_fits):
     for f in range(iuvs.miscellaneous.get_n_int(light_fits)):
         this_det_img = light_fits['primary'].data[f, :, :]
 
+        # Don't bother checking the frame if it's all nan.
+        if np.isnan(this_det_img).all():
+            continue
+
         # Check for bright 'squares' that are the keyhole. This will catch
         # frames where the keyhole but no MUV contamination appears.
         criterion0 = False
