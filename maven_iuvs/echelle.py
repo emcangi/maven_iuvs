@@ -60,7 +60,10 @@ from maven_iuvs.user_paths import l1a_dir, idl_pipeline_dir
 from maven_iuvs.spice import load_iuvs_spice
 import spiceypy as chilisnake
 
-#jax_config.update('jax_disable_jit', True)
+# Necessary to enable 64 bit floats: dynesty uses _LOWL_VAL=-1e300, so we must
+# promote arrays to float64 or we will get a RuntimeWarning: overflow 
+# encountered in cast on every iteration of dynesty.
+jax.config.update("jax_enable_x64", True) 
 
 # WEEKLY REPORT CODE ==================================================
 
@@ -2616,7 +2619,8 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
         BU_bg_jnp = jnp.nan
         
     objfn_args = (jnp.array(wavelengths), jnp.array(edges), jnp.array(CLSF),
-                  jnp.array(spec), jnp.array(unc), BU_bg_jnp, fit_IPH_component)
+                  jnp.array(spec, dtype=jnp.float64), jnp.array(unc, dtype=jnp.float64), 
+                  BU_bg_jnp, fit_IPH_component)
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
 
     # Now call the fitting routine
