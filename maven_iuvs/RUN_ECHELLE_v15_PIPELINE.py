@@ -6,7 +6,6 @@ import threading
 import subprocess
 import multiprocessing as mp
 import pandas as pd
-import numpy as np
 from astropy.io import fits
 import argparse
 from pathlib import Path
@@ -23,13 +22,11 @@ if project_dir in sys.path:
     sys.path.remove(project_dir)
     sys.path.append(project_dir)
 
-import maven_iuvs as iuvs # look, idk why, but it breaks if this isn't here.
 from maven_iuvs.download import get_default_data_directory
 from maven_iuvs.echelle import get_dir_metadata, find_files_with_geometry, \
      downselect_data, convert_l1a_to_l1c, get_dark_from_keyfile, \
-     pipe_processer, command_IDL_and_verify_done
-from maven_iuvs.miscellaneous import orbit_folder, iuvs_orbno_from_fname, \
-    iuvs_filename_to_datetime, iuvs_segment_from_fname
+     pipe_processer, command_IDL_and_verify_done, open_idl_and_compile_writel1c_script
+from maven_iuvs.miscellaneous import orbit_folder, iuvs_orbno_from_fname
 
 # ARG PARSE 
 # =============================================================================
@@ -188,7 +185,7 @@ def _record_result(obs_md, result, shared_results, lock):
             shared_results['other_log'] = shared_results['other_log'] + [f"{result}"]
 
 
-def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path, 
+def idl_writer(idl_cmd_q, l1c_savepath, idl_outlog_path, 
                idl_errlog_path):
     """
     Main target of the Process object: writes commands to the IDL subprocess.
@@ -208,36 +205,10 @@ def idl_writer(idl_cmd_q, idl_cmd, idl_pipeline_dir, idl_outlog_path,
     ----------
     n/a
     """
-    os.chdir(idl_pipeline_dir)
-    
-    # Open the IDL process
-    proc = subprocess.Popen(idl_cmd,
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True, bufsize=1)
-
-    # Start a queue for stderr so we can watch for script compilation success
-    # This queue can be a basic queue because it's not shared between processes
-    err_queue = queue.Queue()
-
-    # start stderr thread that keeps track of IDL output
-    stderr_thread = threading.Thread(target=pipe_processer, 
-                                     args=(proc.stderr, idl_errlog_path, err_queue), 
-                                     daemon=True)
-    stderr_thread.start()
-
-    stdout_thread = threading.Thread(target=pipe_processer, 
-                                     args=(proc.stdout, idl_outlog_path), 
-                                     daemon=True)
-    stdout_thread.start()
-
-
-    # Compile the l1c writeout script, make sure it's ready -------------------
-    # Set up a queue watcher to listen for script compilation success
-    compiled_msg = "% Compiled module: WRITE_L1C_FILE_FROM_PYTHON."
-    compile_cmd = ".com write_l1c_file_from_python.pro\n"
-    command_IDL_and_verify_done(err_queue, proc, compile_cmd, compiled_msg)
+    proc, _, stderr_thread, _, stdout_thread = \
+                open_idl_and_compile_writel1c_script(l1c_savepath, 
+                                                     output_log=idl_outlog_path, 
+                                                     err_log=idl_errlog_path)
 
     # -------------------------------------------------------------------------
     # Now that the script is ready, IDL will collect commands and run them           
@@ -286,13 +257,13 @@ def main():
     which_l1a = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
 
     IUVS_FOLD = "/home/emc/Insync/OneDrive-CU/Research/IUVS/"
-    IDL_FOLD = IUVS_FOLD + "IDL_pipeline/"
+
     # L1c base 
     IUVS_DATA_DIR = "/media/emc/ExtremePro/IUVS/IUVS_Data/"
-    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/Replacement_Files/"
+    L1C_DIR = IUVS_DATA_DIR + "l1c_ech_data/FMR_v15/TestingParallel/"
                 # Replacement_Files # Dir for redoing files that produced 
                 #                    false positives
-                # Dynesty_AWS2 # most recent dir.
+                # DynestyAWS_2 # most recent dir.
                 # Dynesty # original results, full of writeout errors.
     
     # LOAD LIGHT/DARK PAIR CSV
@@ -398,9 +369,8 @@ def main():
                                               # Arguments for launchign IDL, 
                                               # required to make it work in a 
                                               # subprocess.
-                                              ["stdbuf", "-oL", "-eL", "idl", "-quiet"], 
-                                              IDL_FOLD,
-                                              oln, eln))  
+                                              this_orbfold,
+                                              oln, eln))
                 IDLwriter.start()
 
                 idl_process_kwargs={"open_idl": False,
@@ -410,7 +380,7 @@ def main():
 
             # The Manager also has to keep a dictionary of high-level results
             # for each file so that the outcome can be logged by Python
-            resdict_thisorb = manager.dict({"OK": [], "no_light": [], 
+            resdict_thisorb = manager.dict({"OK": [], "no_light": [],
                                             "no_dark": [], "other": [], 
                                             "other_log": []})
             
