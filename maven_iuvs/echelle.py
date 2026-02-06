@@ -3785,7 +3785,7 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
                   '{ph_per_s_csv_path}'\n"
     if cmd_queue is None:
         if open_idl is True:
-            returnval = writeout_with_IDL(l1c_savepath, light_l1a_path,
+            returnval = open_idl_and_write_l1c(l1c_savepath, light_l1a_path,
                                           idl_command)
             return returnval
     # Multiprocessing usage
@@ -3794,7 +3794,7 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
         return "IDL OK"
 
 
-def writeout_with_IDL(l1c_savepath, light_l1a_path, process_file_command, 
+def open_idl_and_write_l1c(l1c_savepath, light_l1a_path, process_file_command, 
                       errlogname="IDLerrors.txt"):
     """
     Opens IDL with subprocess, and starts a thread to monitor the output to 
