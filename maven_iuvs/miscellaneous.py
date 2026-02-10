@@ -5,7 +5,7 @@ import os
 from maven_iuvs.user_paths import l1a_dir, l1a_full_mission_reprocess_dir
 
 # Common regular expressions for parsing filenames, with examples commented
-gen_error_RE = r"(?<=ERROR:\s)[\s\S]*?with file mvn.+\.fits\.gz"
+gen_error_RE = r"(?<=ERROR:\s)[\s\S]*?[\w|\s]*mvn.+\.fits\.gz"
 folder_RE = r".+(?=mvn)" # e.g. /full/path/to/l1a_ech_data/
 datetime_RE = r"(?<=-ech_)[0-9]{8}[tT][0-9]{6}" # e.g. 20250704T110137
 orbit_set_RE = r"(?<=/orbit)[0-9]{5}(?=/)" # e.g. 14500
