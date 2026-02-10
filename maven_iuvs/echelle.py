@@ -49,8 +49,8 @@ from maven_iuvs.instrument import ech_LSF_unit, convert_spectrum_DN_to_photoeven
                                    ech_dH1215, ech_best_H_pixel
 from maven_iuvs.miscellaneous import get_n_int, locate_missing_frames, \
     iuvs_orbno_from_fname, iuvs_filename_to_datetime, iuvs_segment_from_fname, \
-    orbno_RE, fn_RE, fn_no_version_RE, orbit_folder, findDiff, \
-    relative_path_from_fname
+    orbno_RE, fn_RE, fn_no_version_RE, looser_uniqueID_RE, orbit_folder, \
+    findDiff, relative_path_from_fname
 from maven_iuvs.geometry import has_geometry_pvec, get_mean_mrh
 from maven_iuvs.pds import get_pds_dates
 from maven_iuvs.search import get_latest_files, find_files, dropxml
@@ -520,7 +520,8 @@ def find_files_missing_in_key(master_key, ech_l1a_idx, cutoff=19964):
 
 def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                                        keyfolder=f"{idl_pipeline_dir}light-dark-pair-lists/",
-                                       verbose=True, return_detail=False):
+                                       verbose=True, return_detail=False, 
+                                       reinvestigate=False):
     """
     Searches the light/dark key csv (keyfile) for any filenames that have since 
     had a revision update. In that sense, the "copy of record" is the copy on 
@@ -551,7 +552,8 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
     problems : pandas DataFrame
                Files that caused a problem
     """
-    def find_match_on_disk(key_filename, parent_folder, orbit_fold_cache):
+    def find_match_on_disk(key_filename, parent_folder, orbit_fold_cache,
+                           RE_to_use=fn_no_version_RE):
         """
         Subroutine to search for a similarly named file on the local disk.
 
@@ -566,12 +568,12 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
         disk_filename : string
                         Name of best-match file on local disk
         """
-
         # get the base filename
-        df_fn_base = re.match(iuvs.miscellaneous.fn_no_version_RE, key_filename)[0]
+        df_fn_base = re.search(RE_to_use, key_filename).group(0)
 
         # Look for the matching file on disk 
         disk_filename = None
+
         for f in orbit_fold_cache[parent_folder]:
             if df_fn_base in f:
                 disk_filename = f
@@ -604,6 +606,47 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
             else:
                 return False
         
+    def search_old_keyfile(luid, keyfolder, l1adir, orbit_folder_cache, verbose=False):
+        # Open the old IDL sav file
+        old_key_sav = sp.io.readsav(keyfolder + "ech_light_dark_fnames_Mayyasi_20230223.sav")
+        old_key_lights = [l.decode('utf-8') for l in old_key_sav['lname_arr']]
+        old_key_darks = [d.decode('utf-8') for d in old_key_sav['dname_arr']]
+        
+        # Loop through all entries in the old keyfile, checking to see if the 
+        # light matches
+        for (l, d) in zip(old_key_lights, old_key_darks):
+            if luid in l:
+                if verbose:
+                    print(f"Light: {luid} ")
+
+                # get local dark folder...
+                darkfold = l1adir + orbit_folder(iuvs_orbno_from_fname(d)) + "/"
+                if verbose:
+                    print(f"Old keyfile listed dark: {d}")
+                disk_darkname = find_match_on_disk(d, darkfold, orbit_folder_cache)
+
+                # Catch a case where files in the old version were renamed
+                # locally in order to be caught by the algorithm
+                if disk_darkname is None:
+                    if verbose:
+                        print("Couldn't find previous file, relaxing filename search")
+                    # Relax the requirements for the filename search
+                    disk_darkname = find_match_on_disk(d, darkfold, orbit_folder_cache, 
+                                                        RE_to_use=looser_uniqueID_RE)
+                    
+                # Last check - for orbit 10316, outlimb. The entry in the IDL 
+                # .sav file is made up. There is no such outdisk or outlimb file
+                # taken at the date/time given for the .sav file's listed dark.
+                # Not much happened on this orbit, so by searching just the
+                # orbit number and day (not time), we can find a dark to use.
+                if disk_darkname is None and "outlimb-orbit10316" in luid:
+                    disk_darkname = find_match_on_disk(d, darkfold, orbit_folder_cache, 
+                                                        RE_to_use=r"orbit.+(?=T)")
+
+                break # Once we got it done, don't waste time
+
+        return disk_darkname
+    
     KEYPATH = keyfolder+keyfile
     MASTER_KEY = pd.read_csv(KEYPATH, dtype="str", na_filter=False)
 
@@ -615,6 +658,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
 
     new_lightnames = MASTER_KEY["Light"].copy()
     new_darknames = MASTER_KEY["Dark"].copy()
+    new_darkfolders = MASTER_KEY["Dark Folder"].copy()
     new_segments = MASTER_KEY["Segment"].copy()
 
     seg_updates = 0
@@ -624,6 +668,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
     whichdir = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}[v]
     l1adir = get_default_data_directory(whichdir)
     orbit_folders = [a.name for a in Path(l1adir).iterdir() if a.is_dir()]
+
     if "cruise" in orbit_folders:
         orbit_folders.remove("cruise")
 
@@ -634,12 +679,6 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
 
     # Keep[ track of any missing lights that seem to have once existed
     lights_not_on_disk_but_in_key = []
-
-    # Open Majd's savfile in case we need to look in there - some darks were
-    # selected by Majd by eye.
-    old_key_sav = sp.io.readsav(keyfolder + "ech_light_dark_fnames_Mayyasi_20230223.sav")
-    old_key_lights = [l.decode('utf-8') for l in old_key_sav['lname_arr']]
-    old_key_darks = [d.decode('utf-8') for d in old_key_sav['dname_arr']]
     
     for i, row in tqdm(MASTER_KEY.iterrows(), total=len(MASTER_KEY)):
         lfolder = row["Light Folder"]
@@ -657,7 +696,7 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
 
         # Catch scenario where light in keyfile is no longer on disk 
         # (may occur if a reprocess is done and a file is missed)
-        if disk_lightname is None: 
+        if disk_lightname is None:
             lights_not_on_disk_but_in_key.append(key_lightname)
             continue
         
@@ -668,52 +707,66 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
             changes["newname"].append(disk_lightname)
 
         # Darks ---------------------------------------------------------------
-        if key_darkname=="No valid dark found": 
-            # This means we've already investigated this light file 
+        # If we already found a dark
+        if "mvn_iuv_l1a" in key_darkname:
             continue 
+        # If the code thinks no dark is available
         else:
-            disk_darkname = find_match_on_disk(key_darkname, dfolder, orbit_folder_cache)
+            if reinvestigate==False:
+                # Don't update the dark, no matter what's there
+                continue
+            elif reinvestigate==True:
+                # Work on finding a dark
 
-            if disk_darkname is None:
-                 # This is the spot for the biggest potential for slowdown. 
-                 # Luckily, it will only be slow hopefully the first time. 
-                 # The function is fast as long as new darks aren't needed.
-                dpath, disk_darkname = get_dark_path(lfolder + key_lightname, 
-                                                     ech_l1a_idx, dark_idx, 
+                # First do a naive search on the exact name.
+                disk_darkname = find_match_on_disk(key_darkname, dfolder, 
+                                                orbit_folder_cache)
+            
+                if disk_darkname is None:
+                    # Find the unique ID for this light file
+                    luid = re.search(iuvs.miscellaneous.uniqueID_RE, key_lightname).group(0) # light uid
+
+                    # Now loop through the old keyfile, checking each entry to see 
+                    # if it matches the row we're currently on in the new keyfile
+                    disk_darkname = search_old_keyfile(luid, keyfolder, l1adir,
+                                                       orbit_folder_cache,
+                                                       verbose=verbose)
+                    
+
+
+                # Failing all of the above, brute force search with Python.
+                # This is the spot for the biggest potential for slowdown.
+                if disk_darkname is None:
+                    if verbose:
+                        print("Trying a brute force search")
+                    _, disk_darkname = get_dark_path(lfolder + key_lightname,
+                                                     ech_l1a_idx, dark_idx,
                                                      return_sep=True)
                 
-                # If it still wasn't found, try searching Majd's key
+                # Now store the dark name
                 if disk_darkname is None:
-                    # Get the unique ID
-                    luid = re.search(iuvs.miscellaneous.uniqueID_RE, disk_lightname).group(0)
-
-                    # Loop through Majd file looking for the light
-                    for (l,d) in zip(old_key_lights, old_key_darks):
-                        # check if unique ID matches light
-                        if luid in l:
-                            # If so, find dark on disk, but only if it's not a fake
-                            if "T000000" not in d: # Some entries have a bad time tag, aren't real files.
-                                disk_darkname = find_match_on_disk(d, dfolder, orbit_folder_cache)
-                            break
-
-                # After all that if still no dark, set to special message 
-                if disk_darkname is None:
+                    if verbose:
+                        print("Couldn't find a dark")
+                        print()
                     disk_darkname = "No valid dark found"
+                    disk_darkfolder = "No valid dark found"
+                else:
+                    if verbose:
+                        print("Found one, adding to file")
+                        print()
+                    orbfold = orbit_folder(iuvs_orbno_from_fname(disk_darkname))
+                    disk_darkfolder = l1adir + f"{orbfold}/"
 
                 new_darknames.loc[i] = disk_darkname
+                new_darkfolders.loc[i] = disk_darkfolder
                 changes["row"].append(i)
                 changes["oldname"].append(key_darkname)
-                changes["newname"].append(disk_darkname)
-            else:
-                if name_should_be_updated(key_darkname, disk_darkname):
-                    new_darknames.loc[i] = disk_darkname
-                    changes["row"].append(i)
-                    changes["oldname"].append(key_darkname)
-                    changes["newname"].append(disk_darkname)
+                changes["newname"].append(disk_darkname)        
 
-    # Apply updates once
+    # Apply updates once - if nothing changed, these are just the originals.
     MASTER_KEY["Light"] = new_lightnames
     MASTER_KEY["Dark"] = new_darknames
+    MASTER_KEY["Dark Folder"] = new_darkfolders
     MASTER_KEY["Segment"] = new_segments
     
     if verbose:
@@ -722,6 +775,8 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
             print(f"Updated filenames for {len(changes['row'])} files to current version.")
             for i, o, n in zip(changes["row"], changes["oldname"], changes["newname"]):
                 print(f"Row {i}: {o} ---> {n}")
+        else:
+            print("No updates needed!")
 
     # Sort it one last time just in case
     MASTER_KEY_new = sort_ldkey_by_date(MASTER_KEY)
