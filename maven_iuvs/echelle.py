@@ -611,7 +611,8 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
         old_key_sav = sp.io.readsav(keyfolder + "ech_light_dark_fnames_Mayyasi_20230223.sav")
         old_key_lights = [l.decode('utf-8') for l in old_key_sav['lname_arr']]
         old_key_darks = [d.decode('utf-8') for d in old_key_sav['dname_arr']]
-        
+
+        disk_darkname = None
         # Loop through all entries in the old keyfile, checking to see if the 
         # light matches
         for (l, d) in zip(old_key_lights, old_key_darks):
@@ -718,22 +719,25 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
             elif reinvestigate==True:
                 # Work on finding a dark
 
-                # First do a naive search on the exact name.
-                disk_darkname = find_match_on_disk(key_darkname, dfolder, 
-                                                orbit_folder_cache)
-            
-                if disk_darkname is None:
-                    # Find the unique ID for this light file
-                    luid = re.search(iuvs.miscellaneous.uniqueID_RE, key_lightname).group(0) # light uid
+                # Find the unique ID for this light file
+                luid = re.search(iuvs.miscellaneous.uniqueID_RE, key_lightname).group(0) # light uid
 
-                    # Now loop through the old keyfile, checking each entry to see 
-                    # if it matches the row we're currently on in the new keyfile
-                    disk_darkname = search_old_keyfile(luid, keyfolder, l1adir,
-                                                       orbit_folder_cache,
-                                                       verbose=verbose)
+                # Now loop through the old keyfile, checking each entry to see 
+                # if it matches the row we're currently on in the new keyfile
+                disk_darkname = search_old_keyfile(luid, keyfolder, l1adir,
+                                                    orbit_folder_cache,
+                                                    verbose=verbose)
+                
+                if disk_darkname is not None:
+                    # Enforce it to have the same binning, which it might not.
+                    md_light = [f for f in ech_l1a_idx if f['name']==disk_lightname]
+                    md_dark = [f for f in dark_idx if f['name']==disk_darkname]
+
+                    if md_light['binning'] != md_dark['binning']:
+                        disk_darkname = None
+                        if verbose:
+                            print("Dark found in old .sav file has different binning, rejecting")
                     
-
-
                 # Failing all of the above, brute force search with Python.
                 # This is the spot for the biggest potential for slowdown.
                 if disk_darkname is None:
@@ -742,7 +746,15 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                     _, disk_darkname = get_dark_path(lfolder + key_lightname,
                                                      ech_l1a_idx, dark_idx,
                                                      return_sep=True)
-                
+                    
+                # Do a last check to ensure that 3 light files with no voltage
+                # that are labeled echdark are never selected as darks
+                # Should not be needed since these are already sorted, but just in case
+                if "periapse-orbit05748-echdark_20170916T063134" in disk_darkname \
+                    or "outdisk-orbit11061-echdark_20200305T105038" in disk_darkname \
+                    or "inlimb-orbit14124-echdark_20210608T132247" in disk_darkname:
+                    disk_darkname = None
+           
                 # Now store the dark name
                 if disk_darkname is None:
                     if verbose:
@@ -1118,6 +1130,13 @@ def find_dark_options(input_light_idx, idx_list_to_search):
                         and iuvs_segment_from_fname(didx['name']) == iuvs_segment_from_fname(input_light_idx['name'])
                         and ech_isdark(didx))]
     
+    if not dark_options:
+        print("Couldn't find a dark with usual restrictions, relaxing segment restriction")
+        dark_options = [didx for didx in idx_list_to_search 
+                    if (np.abs(didx['datetime'] - input_light_idx['datetime']) < half_orbit
+                        and didx['binning'] == input_light_idx['binning']
+                        and didx['int_time'] == input_light_idx['int_time']
+                        and ech_isdark(didx))]
     return dark_options
 
 
