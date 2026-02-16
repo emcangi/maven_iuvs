@@ -35,6 +35,30 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
     ---------
     nothing - just prints out a report.
     """
+
+    def compare_values(hdu, field1, field2):
+        # fits1 and fits2 are inherited from parent function.
+        if fits1[hdu].data[field1].dtype in [">f8", "float64", "int64"]:
+            mask = ~(np.isnan(fits1[hdu].data[field1]) | np.isnan(fits2[hdu].data[field2]))
+            all_equal = np.allclose(fits1[hdu].data[field1][mask], 
+                                    fits2[hdu].data[field2][mask])
+        else: # Strings etc should be the same.
+            all_equal = (fits1[hdu].data[field1] ==
+                        fits2[hdu].data[field2]).all()
+        return all_equal
+    
+    def show_discrepancy(hdu, field):
+        print(f"{n} discrepancy")
+        print(f"\t{labels[0]}: {fits1[hdu].data[field]}")
+        print(f"\t{labels[1]}: {fits2[hdu].data[field]}")
+        print()
+    
+    def print_brightness_uncertainty_diffs(old_ver_lbl, v15_fits, older_fits):
+        print("Brightness uncertainty processing changed:")
+        print(f"{old_ver_lbl}: BRIGHT_ONESIGMA_KR:\n{older_fits["BRIGHTNESSES"].data['BRIGHT_ONESIGMA_KR']}")
+        print(f"v15: BRIGHT_H_ONESIGMA_KR:\n{v15_fits["BRIGHTNESSES"].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
+              f"v15: BRIGHT_D_ONESIGMA_KR:\n{v15_fits["BRIGHTNESSES"].data['BRIGHT_D_ONESIGMA_KR']}")
+
     # Get common HDU names
     f1_hdus = [hdu.name.upper() for hdu in fits1]
     f2_hdus = [hdu.name.upper() for hdu in fits2]
@@ -60,34 +84,40 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                     print("Skipping kernels because they're definitely different due to pipeline changes upstream")
                     print()
                     continue
+                elif n not in fits2[hduname].data.names:
+                    print(f"Header {n} has no equivalent in {labels[1]} products.")
+                    print()
                 # Uncertainties have changed:
                 elif (n=="BRIGHT_H_ONESIGMA_KR") \
                      or (n=="BRIGHT_D_ONESIGMA_KR") \
                      or (n=="BRIGHT_IPH_ONESIGMA_KR") \
                      or (n=="BRIGHT_ONESIGMA_KR"):
-                    # for comparing v15 (done with python) to earlier versions:
-                    print("Brightness uncertainty processing changed:")
+                    
+                    # v14 or v13 was passed in first
                     if n=="BRIGHT_ONESIGMA_KR":
-                        print(f"{labels[0]}: BRIGHT_ONESIGMA_KR:\n{fits1[hduname].data['BRIGHT_ONESIGMA_KR']}")
-                        print(f"{labels[1]}: BRIGHT_H_ONESIGMA_KR:\n{fits2[hduname].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
-                              f"{labels[1]}: BRIGHT_D_ONESIGMA_KR:\n{fits2[hduname].data['BRIGHT_D_ONESIGMA_KR']}")
-                    else:
-                        print(f"{labels[0]}: {n}:\n{fits1[hduname].data[n]}")
-                        print(f"{labels[1]}: BRIGHT_ONESIGMA_KR:\n{fits2[hduname].data['BRIGHT_ONESIGMA_KR']}")
-                    print()
-                elif n not in fits2[hduname].data.names:
-                    print(f"Header {n} has no equivalent in {labels[1]} products.")
-                    print()
-                else:
-                    # Compare arrays; different behavior for numbers vs. strings.
-                    if fits1[hduname].data[n].dtype in [">f8", "float64", "int64"]:
-                        mask = ~(np.isnan(fits1[hduname].data[n]) | np.isnan(fits2[hduname].data[n]))
-                        all_equal = np.allclose(fits1[hduname].data[n][mask], 
-                                                fits2[hduname].data[n][mask])
-                    else:
-                        all_equal = (fits1[hduname].data[n] ==
-                                     fits2[hduname].data[n]).all()
 
+                        # If the other product is v15, uncertainties totally changed
+                        # so always print them out
+                        if "v15" in labels[1]:
+                            print_brightness_uncertainty_diffs(labels[0], fits2, fits1)
+                        else: # if comparing v14 to v14 or to v13, do a regular check
+                            all_equal = compare_values(hduname, n, n)
+                            if all_equal:
+                                if verbose:
+                                    print(f"{n} entry is equal")
+                            else:
+                                show_discrepancy(hduname, n)
+
+                    else: # v15 is fits1, some older version is fits2
+                        print_brightness_uncertainty_diffs(labels[1], fits1, fits2)
+                    print()
+
+                else: # For any other HDU entry, just do a straight up comparison
+
+                    # Compare arrays; different behavior for numbers vs. strings.
+                    # This just checks that values are "pretty dang close" to ignore 
+                    # differences due to how IDL and Python handle floats differently. 
+                    all_equal = compare_values(hduname, n, n)
 
                     if all_equal:
                         if verbose:
@@ -102,10 +132,7 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                                 print(f"{labels[1]}: {fits2[hduname].data[n]}")
                                 print()
                         else: 
-                            print(f"{n} discrepancy")
-                            print(f"{labels[0]}: {fits1[hduname].data[n]}")
-                            print(f"{labels[1]}: {fits2[hduname].data[n]}")
-                            print()
+                            show_discrepancy(hduname, n)
             
             for n in fits2[hduname].data.names:
                 if n not in fits1[hduname].data.names \
@@ -117,7 +144,6 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                     print(fits2[hduname].data[n])
                     print()
                     
-                # print(f"Now checking {n}:") 
 
     print("Finished")
 
@@ -158,12 +184,12 @@ def compare_PDS_with_reprocess(l1c_root, pds_filelist, maxorbit=50000):
     # Collect the unique IDs of files on PDS--that is, filenames with repetitive or morphing information stripped out.
     # The result contains only the stuff needed to ID the file, like orbit number, obs type, and timestamp.
     # namesonly has already had version numbers stripped.
-    PDS_UNIQUE_FILES = [re.sub(r"(?<=[0-9])t(?=[0-9])", "T", re.search(r"mvn.+", str(n)).group(0)) for n in namesonly] # 
+    PDS_UNIQUE_FILES = [re.sub(r"(?<=[0-9])t(?=[0-9])", "T", re.search(r"mvn.+", str(n)).group(0)) for n in namesonly]
 
     # Make a list of all files that were generated in the recent reprocess effort on the local computer.
     reprocessed_files = []
     
-    for path, subdirs, files in os.walk(l1c_root):
+    for _, _, files in os.walk(l1c_root):
         for f in files:
             if "fits.gz" in f: # Only look for fits files, ignore the xml labels and .txt log files.
                 reprocessed_files.append(re.sub(r"\_v.+", "", f)) # Remove the version number, since that will be different from PDS. 
@@ -181,7 +207,6 @@ def compare_PDS_with_reprocess(l1c_root, pds_filelist, maxorbit=50000):
             MASTERLIST["Filename"].append(PDSFILE)
             MASTERLIST["Status"].append("OK: Reprocess successful")
             MASTERLIST["Previously on PDS"].append("Yes")
-            pass
         else:
             orbit = int(re.search(orbno_RE, PDSFILE).group(0))
             
@@ -199,7 +224,7 @@ def compare_PDS_with_reprocess(l1c_root, pds_filelist, maxorbit=50000):
                 MASTERLIST["Previously on PDS"].append("Yes")
             else: 
                 raise Exception("This should never be printed")
-                pass
+
 
     print(f"Total PDS files: {len(PDS_UNIQUE_FILES)}" )
     print(f"Total PDS files for which a reprocess succeeded: {ok}")
@@ -317,13 +342,15 @@ def make_logfile_list(l1c_folders, latest=True):
     for orbitdir in l1c_folders:
         # print(f"Orbit: {orbitdir}")
         loglist = glob.glob(f'{orbitdir}/*.txt') 
-        
         # Ignore logfiles that contain information about files with multiple dark entries in the .sav file
         loglist = [l for l in loglist if "dup_sav_entry_log.txt" not in l]
 
+        # Ignore logfiles if they are empty
+        loglist = [l for l in loglist if os.stat(l).st_size != 0]
+
         # Find the latest file that logs problems in the folder's rep
         latest_file = max(loglist, key=os.path.getctime)
-        latest_logfiles.append(latest_file)
+        latest_logfiles.append([latest_file])
 
         all_logfiles.append(loglist)
     if latest:
@@ -397,7 +424,7 @@ def get_all_errors(all_logs, orbit_folder_list):
         all_err_msgs = []
 
         for log in loglist: 
-            with open(log) as f:
+            with open(log, mode="r", encoding="utf-8") as f:
                 print(f"FILE {log}:")
                 thisfile = f.read()
 
@@ -410,6 +437,9 @@ def get_all_errors(all_logs, orbit_folder_list):
 
                 # Get all error messages
                 error_messages = re.findall(gen_error_RE, thisfile)
+                # print(error_messages)
+
+                assert len(error_messages) == numprob
 
                 # Cumulative sum of errors and successes
                 all_err_msgs += error_messages
@@ -446,11 +476,12 @@ def sort_files_by_error(error_lines):
                   "illegal subscript": [], 
                   "conflicting structure": [],
                   "binning": [],
+                  "no dark": [],
                   "other": []}
     
-    for eline in error_lines:      
+    for eline in error_lines:  
         # Find the filename
-        fn = re.search(r"(?<=with file )mvn.+", eline).group(0)
+        fn = re.search(r"(?<=\s)mvn.+", eline).group(0)
 
         # Identify which error it is
         if "too noisy" in eline:
@@ -461,6 +492,8 @@ def sort_files_by_error(error_lines):
             error_dict["binning"].append(fn)
         elif "Illegal subscript range" in eline:
             error_dict["illegal subscript"].append(fn)
+        elif "No valid dark" in eline:
+            error_dict["no dark"].append(fn)
         else: 
             print(f"Found other on {eline} with file {fn}")
             error_dict["other"].append(fn)
