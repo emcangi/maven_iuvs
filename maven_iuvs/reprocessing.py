@@ -55,9 +55,9 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
     
     def print_brightness_uncertainty_diffs(old_ver_lbl, v15_fits, older_fits):
         print("Brightness uncertainty processing changed:")
-        print(f"{old_ver_lbl}: BRIGHT_ONESIGMA_KR:\n{older_fits["BRIGHTNESSES"].data['BRIGHT_ONESIGMA_KR']}")
-        print(f"v15: BRIGHT_H_ONESIGMA_KR:\n{v15_fits["BRIGHTNESSES"].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
-              f"v15: BRIGHT_D_ONESIGMA_KR:\n{v15_fits["BRIGHTNESSES"].data['BRIGHT_D_ONESIGMA_KR']}")
+        print(f"{old_ver_lbl}: BRIGHT_ONESIGMA_KR:\n{older_fits['BRIGHTNESSES'].data['BRIGHT_ONESIGMA_KR']}")
+        print(f"v15: BRIGHT_H_ONESIGMA_KR:\n{v15_fits['BRIGHTNESSES'].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
+              f"v15: BRIGHT_D_ONESIGMA_KR:\n{v15_fits['BRIGHTNESSES'].data['BRIGHT_D_ONESIGMA_KR']}")
 
     # Get common HDU names
     f1_hdus = [hdu.name.upper() for hdu in fits1]
