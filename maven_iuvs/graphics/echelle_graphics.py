@@ -15,20 +15,19 @@ from maven_iuvs.binning import get_img_dimensions
 from maven_iuvs.constants import D_offset
 from maven_iuvs.instrument import ech_Lya_slit_start, ech_Lya_slit_end
 from maven_iuvs.echelle import make_dark_index, downselect_data, add_in_quadrature, background, \
-    pair_lights_and_darks, coadd_lights, find_files_missing_geometry, get_dark_frames, \
+    coadd_lights, find_files_missing_geometry, get_dark_frames, \
     subtract_darks, clean_data, fit_H_and_D, line_fit_initial_guess, \
     get_wavelengths, get_spectrum, load_lsf, CLSF_from_LSF, ran_DN_uncertainty, \
     get_ech_slit_indices, make_fit_param_dict, check_whether_IPH_fittable, \
-    convert_to_physical_units, find_bad_dark_frames, find_bad_light_frames
+    convert_to_physical_units, find_bad_dark_frames, find_bad_light_frames, \
+    get_dark_from_keyfile
 from maven_iuvs.geometry import get_mean_mrh
 from maven_iuvs.graphics import color_dict, make_sza_plot, \
      make_tangent_lat_lon_plot, make_alt_plot
 from maven_iuvs.graphics.line_fit_plot import detector_image
 from maven_iuvs.miscellaneous import iuvs_orbno_from_fname, \
     iuvs_segment_from_fname, get_n_int, iuvs_filename_to_datetime, orbno_RE, fn_noext_RE, fn_RE
-from maven_iuvs.search import find_files 
 from maven_iuvs.time import utc_to_sol
-from maven_iuvs.user_paths import l1a_dir, l1a_full_mission_reprocess_dir
 
 # COMMON COLORS ==========================================================================================
 model_color = "#1b9e77"
@@ -39,7 +38,8 @@ guideline_color = "xkcd:cool gray"
 
 # QUICKLOOK CODE =========================================================================================
 
-def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, segment=None, start_k=0, savefolder=None, **kwargs):
+def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, verbose=False,
+                   segment=None, savefolder=None, keyfile_folder="/", **kwargs):
     """
     Runs quicklooks for the files in ech_l1a_idx, downselected by either date, orbit, or segment.
 
@@ -65,9 +65,17 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
     Saved quicklooks
     """
 
+    if v=="v13":
+        light_dark_keyfile = keyfile_folder + "MASTER_LIGHT_DARK_KEY_v13.csv"
+    else:
+        light_dark_keyfile = keyfile_folder + "MASTER_LIGHT_DARK_KEY_v14.csv"
+
     dark_idx = make_dark_index(ech_l1a_idx)
     if selected_l1a is None:
-        selected_l1a = downselect_data(ech_l1a_idx, date=date, orbit=orbit, segment=segment)
+        selected_l1a = downselect_data(ech_l1a_idx, light_dark="light", date=date, orbit=orbit, segment=segment)
+
+    # Now remove any darks
+    selected_l1a = downselect_data(selected_l1a, light_dark="light")
 
     # Make the quicklook folder if it's not there
     if savefolder is not None:
@@ -81,9 +89,6 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
     # Files without geometry - list of file names
     no_geometry = [i['name'] for i in find_files_missing_geometry(selected_l1a)]
 
-    # TODO: fix bug if "verbose" flag is missing from call
-    lights_and_darks = pair_lights_and_darks(selected_l1a, dark_idx, verbose=False)
-
     # Arrays to keep track of which files were processed, which were already done, and which had problems
     processed = []
     badfiles = []
@@ -93,55 +98,50 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
     files_missing_dark = []
 
     # Loop through the dictionary containing light and dark pairs and run the quicklook code on each set.
-    ldkeys = list(lights_and_darks) 
-    for ki in tqdm(range(start_k, len(ldkeys))):
-        k = ldkeys[ki]
-        light_idx = lights_and_darks[k][0]
 
-        if v=="v13":
-            thedir = l1a_dir
+    for light_md in tqdm(selected_l1a):
+        # Get paths for light and dark
+        lfold, lfile, dfold, dfile = get_dark_from_keyfile(light_md['name'], 
+                                                           light_dark_keyfile)
+
+        light_path = lfold + lfile
+        if dfile == "No valid dark found":
+            dark_path = dfile
         else:
-            thedir = l1a_full_mission_reprocess_dir
+            dark_path = dfold + dfile
 
-        # open the light file --------------------------------------------------------------------
-        light_path = find_files(data_directory=thedir,
-                                use_index=False, pattern=light_idx['name'])[0]
-
-        # open the dark file ---------------------------------------------------------------------
-        dark_path = find_files(data_directory=thedir,
-                               use_index=False, pattern=lights_and_darks[k][1]["name"])
-        
-        if dark_path:
-            dark_path = dark_path[0]
-        else:
-            dark_path = "No valid dark found"
+        # Select the dark metadata entry
+        dark_md = [i for i in dark_idx if i['name'] == dfile][0]
 
         quicklook_status = ""
         try:
-            quicklook_status = make_one_quicklook(lights_and_darks[k], light_path, dark_path, no_geo=no_geometry, savefolder=savefolder, **kwargs) 
+            quicklook_status = make_one_quicklook(light_md, light_path, 
+                                                  dark_md, dark_path, 
+                                                  no_geo=no_geometry,
+                                                  savefolder=savefolder, 
+                                                  **kwargs) 
         except Exception as e:  # Handle uncaught exceptions
             quicklook_status = e.args[0] #  Collect the actual message
-            if kwargs["verbose"] is True:
+            if verbose is True:
                 raise(e)
         finally:    
             # Now keep track of what happened
             if quicklook_status == "File exists":
-                already_done.append(light_idx['name'])
+                already_done.append(light_md['name'])
             elif (quicklook_status=="Missing critical observation data: no valid lights"):
-                badfiles.append(light_idx['name'])
+                badfiles.append(light_md['name'])
             elif (quicklook_status=="No dark observation found"):
-                badfiles.append(light_idx['name'])
+                badfiles.append(light_md['name'])
             elif (quicklook_status=="Missing critical observation data: no valid darks"): 
                 # This is different from files missing dark. Here, a dark file was found, but the frames are all bad.
-                files_missing_dark.append(light_idx['name'])
+                files_missing_dark.append(light_md['name'])
             elif (quicklook_status=="Keyword \'SPE_SIZE\' not found."):
-                nonlinearfiles.append(light_idx['name'])
+                nonlinearfiles.append(light_md['name'])
             elif (quicklook_status == "Success"):
-                processed.append(light_idx['name'])
+                processed.append(light_md['name'])
             else:
-                unique_exceptions.append(f"{light_idx['name']} - Exception: {quicklook_status}")
+                unique_exceptions.append(f"{light_md['name']} - Exception: {quicklook_status}")
                 print("Got an unhandled exception, but it should be logged.")
-        ki += 1
 
     if savefolder is not None:
         logfile_name = f"log{selected_l1a[0]['orbit']}-{selected_l1a[-1]['orbit']}_processed_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -304,19 +304,23 @@ def quicklook_figure_skeleton(N_thumbs, figsz=(44, 24), thumb_cols=10, aspect=1)
     return fig, [SpectrumAx, MainAx], R1Axes, R2Axes, ThumbAxes 
 
 
-def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show=True, savefolder=None, 
-                       figsz=(42, 26), fs="large", useframe="coadded", cmap=None,
-                       arange=None, prange=None, special_prange=[0, 65], show_DN_histogram=False, verbose=False, img_dpi=96, overwrite=False, overwrite_prior_to=datetime.datetime.now()):
+def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None, 
+                       show=True, savefolder=None, figsz=(42, 26), fs="large", 
+                       useframe="coadded", cmap=None,
+                       arange=None, prange=None, special_prange=[0, 65], 
+                       show_DN_histogram=False, img_dpi=96, 
+                       overwrite=False, overwrite_prior_to=datetime.datetime.now()):
     """ 
     Fills in the quicklook figure for a single observation.
     
     Parameters
     ----------
-    index_data_pair : List of dictionaries
-                      Of the form [light_metadata, dark_metadata], where each entry
-                      contain the metadata of a single observation. Light first, then dark.
+    light_md : Dictionary
+               Metadata of the light observation
     light_path : string
                  Path to light file
+    dark_md : Dictionary
+              Metadata of the light observation
     dark_path : string
                  Path to light file
     no_geo : list
@@ -344,8 +348,6 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
                         Can be turned on to show a histogram of all the pixel counts.
                         Useful for determining where to set prange, but since prange is ideally passed in,
                         this means you will want to run this iteratively/manually.
-    verbose : boolean
-              whether to print feedback messages
     img_dpi : int
               DPI for saved image, keep at 96 for a reasonable image size.
     overwrite : boolean
@@ -673,7 +675,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
             DarkAxes[i].text(0, -0.05, "Bad dark frame not included in dark subtraction.", fontsize=14, transform=DarkAxes[i].transAxes)
 
     # Plot the geometry frames ---------------------------------------------------------------------------------
-    if index_data_pair[0]['name'] in no_geo:
+    if light_md['name'] in no_geo:
         GeoAxes[0].text(0.1, 0.9, "No geometry available", fontsize=14+fontsizes[fs], transform=GeoAxes[0].transAxes)
 
         for a in GeoAxes:
@@ -717,7 +719,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     print_me = [f"Orbit {iuvs_orbno_from_fname(light_fits['Primary'].header['filename'])}:  {segment}",
                 f"Mars date: MY {My}, Sol {round(sol, 1)}, Ls {int(round(light_fits['Observation'].data['SOLAR_LONGITUDE'][0], ndigits=0))}°", 
                 f"UTC date/time: {utc_obj.strftime('%Y-%m-%d')}, {utc_obj.strftime('%H:%M:%S')}", 
-                f"{t1:<22}Light: {index_data_pair[0]['int_time']} s{'':<6}Dark: {index_data_pair[1]['int_time']} s",
+                f"{t1:<22}Light: {light_md['int_time']} s{'':<6}Dark: {dark_md['int_time']} s",
                 #
                 f"Light file: {re.search(fn_RE, light_path).group(0)}", 
                 f"Dark file: {re.search(fn_RE, dark_path).group(0)}",
