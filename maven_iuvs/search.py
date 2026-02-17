@@ -188,7 +188,7 @@ def find_files(data_directory=None,
     return orbfiles
 
 
-def get_filename_glob_string(**filename_kwargs):
+def get_filename_glob_string(omit_ext=False, **filename_kwargs):
     """Generate glob string for IUVS filenames.
 
     Parameters
@@ -240,22 +240,22 @@ def get_filename_glob_string(**filename_kwargs):
     else:
         raise TypeError("orbit must be int or glob string.")
 
-    # if isinstance(orbit, int):
-    #     # orbit is an integer referring to a specific orbit
-    #     orbit_string = "orbit" + str(orbit).zfill(5)
-    # elif isinstance(orbit, str):
-    #     # orbit is a glob pattern matching multiple orbits
-    #     orbit_string = orbit
-    # else:
-    #     raise TypeError("orbit must be int or glob string.")
-
-    filename_glob = ("mvn_iuv_"
-                     + level + "_"
-                     + segment + "-"
-                     + orbit_string + "-"
-                     + channel + "*_"
-                     + date_time + "_"
-                     + "*.fits*")
+    if omit_ext:
+        filename_glob = ("mvn_iuv_"
+                        + level + "_"
+                        + segment + "-"
+                        + orbit_string + "-"
+                        + channel + "*_"
+                        + date_time + "*"
+                        )
+    else:
+        filename_glob = ("mvn_iuv_"
+                        + level + "_"
+                        + segment + "-"
+                        + orbit_string + "-"
+                        + channel + "*_"
+                        + date_time + "_"
+                        + "*.fits*")
 
     filename_glob = folder+filename_glob
     

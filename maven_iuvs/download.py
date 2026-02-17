@@ -422,6 +422,8 @@ def sync_data(spice=True, level='l1b',
               delete_old=None,
               iuvs_vm_password=None,
               ssh_pkey=None,
+              ex_rsync_flags="",
+              omit_ext=False,
               **filename_kwargs):
     """
     Synchronize new SPICE kernels and L1B data from the VM and remove
@@ -451,6 +453,18 @@ def sync_data(spice=True, level='l1b',
 
         Defaults to None, which will raise an interactive prompt.
 
+    iuvs_vm_password : string
+                       Password for user account to VM. Please do not use, it is
+                       bad security practice. Use an SSH key.
+    ssh_pkey : string
+                Path to ssh private key to match the public key that you 
+                hopefully uploaded to the VM.
+    ex_rsync_flags : string
+                     Optional flags to pass to the rsync command
+    omit_ext : boolean
+               if True, will not add an extension to the glob search so that
+               .xml in addition to .fits.gz may be returned.
+
     filename_kwargs : **kwargs
         One or more of level, segment, orbit, channel, date_time, or
         pattern, used to search for IUVS FITS files by by
@@ -462,7 +476,7 @@ def sync_data(spice=True, level='l1b',
     """
 
     # setup search pattern
-    pattern = get_filename_glob_string(**filename_kwargs)
+    pattern = get_filename_glob_string(omit_ext=omit_ext, **filename_kwargs)
 
     #  check if user path data exists and set it if not
     setup_user_paths()
@@ -528,7 +542,7 @@ def sync_data(spice=True, level='l1b',
         # sync SPICE kernels
         if spice:
             print('Updating SPICE kernels...')
-            exflags_rsync = "--delete"
+            exflags_rsync = ex_rsync_flags + " --delete"
             if ssh_pkey is not None:
                 exflags_rsync = exflags_rsync + f' ssh -i {ssh_pkey}'
 
@@ -574,9 +588,23 @@ def sync_data(spice=True, level='l1b',
             # get the list of most recent files, no matter where they are
             #    order matters! putting local_filenames last ensures
             #    duplicates aren't checked or transferred
-            files_to_sync = get_latest_files(np.concatenate([prod_filenames,
-                                                             stage_filenames,
-                                                             local_filenames]))
+            # TODO: This WILL NOT update files that have been modified on the 
+            # VM but haven't otherwise changed names
+            if "--update" in ex_rsync_flags:
+                concatted_filelists = np.concatenate([local_filenames, 
+                                                      prod_filenames,
+                                                      stage_filenames,
+                                                     ])
+            else:
+                concatted_filelists = np.concatenate([prod_filenames,
+                                                      stage_filenames,
+                                                      local_filenames
+                                                     ])
+                print("Warning: Getting latest files typically ignores modification " \
+                      "time. If you need to update files that didn't change name," \
+                      "pass in --update flag to ex_rsync_flags.")
+            
+            files_to_sync = get_latest_files(concatted_filelists)
 
             # figure out which files to get from production and stage
             files_from_production = [a[len(production_vm):]
@@ -601,7 +629,7 @@ def sync_data(spice=True, level='l1b',
 
             print('Syncing ' + str(len(files_from_production)) +
                   ' files from production...')
-            exflags_prod = f'--files-from={transfer_from_production_file.name}'
+            exflags_prod = ex_rsync_flags + " --files-from={transfer_from_production_file.name}"
             if ssh_pkey is not None:
                 exflags_prod = exflags_prod + f' --rsh="ssh -i {ssh_pkey}"'
                             
@@ -619,7 +647,7 @@ def sync_data(spice=True, level='l1b',
             if stage_vm is not None:
                 print('Syncing ' + str(len(files_from_stage)) +
                       ' files from stage...')
-                exflags_stage = f'--files-from={transfer_from_stage_file.name}'
+                exflags_stage = ex_rsync_flags + " --files-from={transfer_from_stage_file.name}"
                 if ssh_pkey is not None:
                     exflags_stage = exflags_stage + f' --rsh="ssh -i {ssh_pkey}"'
 
