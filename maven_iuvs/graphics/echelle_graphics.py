@@ -512,9 +512,9 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
     prange_full = [0, 100]
     if prange is None:
         prange = prange_full
-    for p in range(len(prange)):
-        if prange[p] is None:
-            prange[p] = prange_full[p]
+    for i,p in enumerate(prange):
+        if p is None:
+            prange[i] = prange_full[i]
 
     # Up prange for IPH observations
     if segment == "outspace":
@@ -526,9 +526,9 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
     # Then, if an absolute value has not been set, the code sets the value based on the percentile value.
     if arange is None:
         arange = [None, None]
-    for a in range(len(arange)):
-        if arange[a] is None:
-            arange[a] = np.nanpercentile(all_data, prange[a])
+    for i, a in enumerate(arange):
+        if a is None:
+            arange[i] = np.nanpercentile(all_data, prange[i])
 
     if show_DN_histogram:
         pctles = [50, 75, 99, 99.9]
