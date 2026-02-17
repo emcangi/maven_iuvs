@@ -1,17 +1,16 @@
 import datetime
+import math 
+import re
+import gc
+import os
+from pathlib import Path
 import numpy as np
 from astropy.io import fits
-import os 
-import copy
 import matplotlib as mpl
 import matplotlib.gridspec as gs
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
-import math 
-import re
-import gc
 from tqdm.auto import tqdm
-from pathlib import Path
 from maven_iuvs.binning import get_img_dimensions
 from maven_iuvs.constants import D_offset
 from maven_iuvs.instrument import ech_Lya_slit_start, ech_Lya_slit_end
@@ -37,8 +36,8 @@ data_color = "#d95f02"
 bg_color = "xkcd:cerulean"
 guideline_color = "xkcd:cool gray"
 
-# QUICKLOOK CODE =========================================================================================
 
+# QUICKLOOK CODE =========================================================================================
 
 def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, segment=None, start_k=0, savefolder=None, **kwargs):
     """
