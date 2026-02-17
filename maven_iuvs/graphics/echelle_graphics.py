@@ -107,11 +107,12 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
         light_path = lfold + lfile
         if dfile == "No valid dark found":
             dark_path = dfile
+            dark_md = {} #  make a dummy dict for a scenario with no valid dark
         else:
             dark_path = dfold + dfile
+            # Select the dark metadata entry
+            dark_md = [i for i in dark_idx if i['name'] == dfile][0]
 
-        # Select the dark metadata entry
-        dark_md = [i for i in dark_idx if i['name'] == dfile][0]
 
         quicklook_status = ""
         try:
@@ -367,7 +368,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
     """
 
     # If no dark, return immediately.
-    if dark_path == "No valid dark found":
+    if "No valid dark found" in dark_path:
         return "No dark observation found"
     
     # Adjust font face
