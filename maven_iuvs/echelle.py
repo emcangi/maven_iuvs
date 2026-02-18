@@ -620,10 +620,16 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                 if verbose:
                     print(f"Light: {luid} ")
 
+                # Handle the case where 2 entries exist for a light, especially
+                # the outlimb files in block 8800 and 8900...
+                if "echdark" not in d:
+                    continue # Go back to the top because the next line probably has the dark we want.
+
                 # get local dark folder...
                 darkfold = l1adir + orbit_folder(iuvs_orbno_from_fname(d)) + "/"
                 if verbose:
                     print(f"Old keyfile listed dark: {d}")
+
                 disk_darkname = find_match_on_disk(d, darkfold, orbit_folder_cache)
 
                 # Catch a case where files in the old version were renamed
@@ -727,11 +733,15 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                 disk_darkname = search_old_keyfile(luid, keyfolder, l1adir,
                                                     orbit_folder_cache,
                                                     verbose=verbose)
+                if (disk_darkname is not None) and ("echdark" not in disk_darkname):
+                    if verbose:
+                        print(f"Old .sav file lists gives dark={disk_darkname} which may be a light file, rejecting")
+                    disk_darkname = None
                 
                 if disk_darkname is not None:
                     # Enforce it to have the same binning, which it might not.
-                    md_light = [f for f in ech_l1a_idx if f['name']==disk_lightname]
-                    md_dark = [f for f in dark_idx if f['name']==disk_darkname]
+                    md_light = [f for f in ech_l1a_idx if disk_lightname[:-16] in f['name']][0]
+                    md_dark = [f for f in dark_idx if disk_darkname[:-16] in f['name']][0]
 
                     if md_light['binning'] != md_dark['binning']:
                         disk_darkname = None
@@ -750,9 +760,9 @@ def update_filenames_in_light_dark_key(keyfile, ech_l1a_idx, dark_idx, v,
                 # Do a last check to ensure that 3 light files with no voltage
                 # that are labeled echdark are never selected as darks
                 # Should not be needed since these are already sorted, but just in case
-                if "periapse-orbit05748-echdark_20170916T063134" in disk_darkname \
-                    or "outdisk-orbit11061-echdark_20200305T105038" in disk_darkname \
-                    or "inlimb-orbit14124-echdark_20210608T132247" in disk_darkname:
+                if (disk_darkname is not None) and (("periapse-orbit05748-echdark_20170916T063134" in disk_darkname) \
+                    or ("outdisk-orbit11061-echdark_20200305T105038" in disk_darkname) \
+                    or ("inlimb-orbit14124-echdark_20210608T132247" in disk_darkname)):
                     disk_darkname = None
            
                 # Now store the dark name
