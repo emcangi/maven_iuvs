@@ -98,11 +98,15 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
     files_missing_dark = []
 
     # Loop through the dictionary containing light and dark pairs and run the quicklook code on each set.
+    lights_not_in_key = []
 
     for light_md in tqdm(selected_l1a):
         # Get paths for light and dark
         lfold, lfile, dfold, dfile = get_dark_from_keyfile(light_md['name'], 
                                                            light_dark_keyfile)
+        if lfold==lfile==dfold==dfile=="Light missing":
+            lights_not_in_key.append(light_md['name'])
+            continue
 
         light_path = lfold + lfile
         if dfile == "No valid dark found":
@@ -111,7 +115,10 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
         else:
             dark_path = dfold + dfile
             # Select the dark metadata entry
-            dark_md = [i for i in dark_idx if i['name'] == dfile][0]
+            try:
+                dark_md = [i for i in dark_idx if i['name'] == dfile][0]
+            except IndexError:
+                raise IndexError("Unhandled exception: Couldn't find a dark for {lfile}")
 
 
         quicklook_status = ""
@@ -146,6 +153,11 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
 
     if savefolder is not None:
         logfile_name = f"log{selected_l1a[0]['orbit']}-{selected_l1a[-1]['orbit']}_processed_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        missing_lights_log = "missing_lights_log.log"
+
+        if lights_not_in_key:
+            mll = open(savefolder+missing_lights_log, "w")
+
         with open(f"{savefolder}{logfile_name}", "w") as logfile:
             logfile.write(f"Finished. Ran orbits {selected_l1a[0]['orbit']}--{selected_l1a[-1]['orbit']}\n\n")
             
@@ -190,6 +202,17 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
                 for e in unique_exceptions:
                     logfile.write(f"\t{e}\n")
                 logfile.write("\n") # newline
+
+            if lights_not_in_key:
+                print("ALERT: Found lights missing from the keyfile")
+                logfile.write(f"\n{len(lights_not_in_key)} files aren't in the dark key: \n")
+                for m in lights_not_in_key:
+                    logfile.write(f"\t{m}\n")
+                    mll.write(f"\t{m}\n")
+                logfile.write("\n") # newline
+                mll.write("\n") # newline
+
+                mll.close()
 
             logfile.write(f"Total files: {len(processed) + len(badfiles) + len(already_done) + len(files_missing_dark) + len(nonlinearfiles) + len(unique_exceptions)}\n")
 
