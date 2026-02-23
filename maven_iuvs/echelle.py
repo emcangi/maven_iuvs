@@ -2284,13 +2284,14 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
     if run_writeout:
         assert process_timestamp is not None
-        IDL_status = prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
-                                  fit_params_kR, fit_unc_kR, 
-                                  I_fit_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, 
-                                  IPH_fit_kR_pernm, bgs_kR_pernm, 
-                                  spec_kR_pernm, data_unc_kR_pernm,
-                                  bright_data_ph_per_s, process_timestamp, 
-                                  **idl_process_kwargs)
+        IDL_status = prep_output_and_writeout(light_l1a_path, dark_l1a_path, 
+                                              l1c_savepath, light_fits,
+                                              fit_params_kR, fit_unc_kR,
+                                              arrays_in_kR_pernm,
+                                              arrays_in_DN,
+                                              bright_data_ph_per_s,
+                                              process_timestamp,
+                                              **idl_process_kwargs)
 
         return IDL_status
 
@@ -3692,15 +3693,16 @@ def predict_IPH_linecenter(light_fits):
 # Write out with IDL ==========================================================
 
 def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
-                 fit_params_list, fit_unc_list, I_fit, H_fit, D_fit, IPH_fit, bg_fit,
-                 spec_kR_pernm, data_unc_kR_pernm, bright_data_ph_per_s_array, 
-                 process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
-                 open_idl=True, 
-                 # Use these arguments when cmd_queue=None and open_idl=True.
-                 proc=None, stderr_queue=None, stderr_thread=None,
-                 stdout_queue=None, stdout_thread=None,
-                 # Use the following with multiprocessing only.
-                 cmd_queue=None):
+                            fit_params_list, fit_unc_list,
+                            arrays_kR, arrays_DN, 
+                            bright_data_ph_per_s_array, 
+                            process_timestamp, idl_pipeline_folder=idl_pipeline_dir, 
+                            open_idl=True, 
+                            # Use these arguments when cmd_queue=None and open_idl=True.
+                            proc=None, stderr_queue=None, stderr_thread=None,
+                            stdout_queue=None, stdout_thread=None,
+                            # Use the following with multiprocessing only.
+                            cmd_queue=None):
     """
     Writes out result of model fitting to an l1c file via a call to IDL.
 
@@ -3812,34 +3814,40 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
     bright_data_ph_per_s_df = pd.DataFrame(data=bright_data_ph_per_s_array.transpose(),    # values
                                         columns=[f"i={j}" for j in range(n_int)])  # 1st row as the column names
     
-    # Transpose arrays
-    I_t = I_fit.transpose()
-    H_t = H_fit.transpose()
-    D_t = D_fit.transpose()
-    IPH_t = IPH_fit.transpose()
-    bg_t = bg_fit.transpose()
-    spec_t = spec_kR_pernm.transpose()
-    data_unc_t = data_unc_kR_pernm.transpose()
+    # Unpack arrays of model fits and flattened spectra for writeout, 
+    # transpose, and interleave for writing to a CSV.
+    # pu = physical units, DN = data number
+    spec_pu, data_unc_pu, I_fit_pu, bg_fit_pu, H_fit_pu, D_fit_pu, IPH_fit_pu = arrays_kR
+    spec_DN, data_unc_DN, I_fit_DN, bg_fit_DN, H_fit_DN, D_fit_DN, IPH_fit_DN = arrays_DN 
 
-    # Interleave the arrays, creating one big array with format:
-    # I_0, H_0, D_0, IPH_0, bg_0, spec_0, data_unc_0, I_1, ... data_unc_1, I_2...data_unc_n
-    # Where the subscript is the integratio number, up to n, and each 
+    # Interleave the transposed arrays, creating an array of model fits or 
+    # flattened spectra and data uncertainties vs. wavelength with format:
+    # I_0, I_DN_0, H_0, H_DN_0, D_0, D_DN_0, IPH_DN_0, bg_DN_0, spec_DN_0, 
+    # data_unc_DN_0, I_1, ... data_unc_DN_1, ...data_unc_DN_n
+    # Where the subscript is the integration number, up to n, and each 
     # item is a vector (rows = wavelengths)
-    interleaved = np.stack((I_t, H_t, D_t, IPH_t, bg_t, spec_t, data_unc_t), 
-                           axis=2).reshape(I_t.shape[0], -1)
+    interleaved = np.stack((I_fit_pu.transpose(), I_fit_DN.transpose(), 
+                            H_fit_pu.transpose(), H_fit_DN.transpose(), 
+                            D_fit_pu.transpose(), D_fit_DN.transpose(), 
+                            IPH_fit_pu.transpose(), IPH_fit_DN.transpose(), 
+                            bg_fit_pu.transpose(), bg_fit_DN.transpose(), 
+                            spec_pu.transpose(), spec_DN.transpose(), 
+                            data_unc_pu.transpose(), data_unc_DN.transpose()
+                           ), 
+                           axis=2).reshape(I_fit_pu.transpose().shape[0], -1)
 
     # Make dataframe
     fits_n_spec_df = pd.DataFrame(data=interleaved,
-                                  columns=[f"{lbl}, i={j}" for j in range(n_int) 
-                                           for lbl in ["total_model", 
-                                                       "H_fit", 
-                                                       "D_fit", 
-                                                       "IPH_fit", 
-                                                       "background", 
-                                                       "coadded_spectrum", 
-                                                       "unc_spectrum"]
-                                          ]
-                                 )
+                                  columns=[f"{lbl}_i_{j}" for j in range(n_int) 
+                                           for lbl in ["total_model", "total_model_DN",
+                                                       "H_fit", "H_fit_DN",
+                                                       "D_fit", "D_fit_DN",
+                                                       "IPH_fit", "IPH_fit_DN",
+                                                       "background", "background_DN",
+                                                       "coadded_spectrum", "coadded_spectrum_DN",
+                                                       "unc_spectrum", "unc_spectrum_DN"]
+                                            ]
+                                    )
     
     # Save the output to some temporary files that will be saved outside the Python module.
     all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False,
