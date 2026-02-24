@@ -2276,12 +2276,6 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     # Write out the l1c file
     # ===============================================================================================
 
-    # Unpack for clarity
-    if return_each_line_fit:
-        spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bgs_kR_pernm, H_fit_kR_pernm, D_fit_kR_pernm, IPH_fit_kR_pernm = arrays_in_kR_pernm
-    else: 
-        spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bgs_kR_pernm = arrays_in_kR_pernm
-
     if run_writeout:
         assert process_timestamp is not None
         IDL_status = prep_output_and_writeout(light_l1a_path, dark_l1a_path, 
