@@ -3469,8 +3469,10 @@ def flatten(light_fits, processed_data):
 
 def get_wavelengths(light_fits):
     """
-    Retrieves wavelengths for use from a given light file. This is done in more than one place,
-    so it was useful to make a dedicated function.
+    Retrieves wavelengths for use from a given light file. This is done in more
+    than one place, so it was useful to make a dedicated function. Constructs
+    wavelength grid based on the dispersion relation of the detector based on 
+    the location of Lyman alpha. 
 
     Parameters:
     -----------
@@ -3842,6 +3844,9 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
                                                        "unc_spectrum", "unc_spectrum_DN"]
                                             ]
                                     )
+
+    # Add in the wavelengths as initial column
+    fits_n_spec_df.insert(0, "Wavelength_nm", get_wavelengths(light_fits))
     
     # Save the output to some temporary files that will be saved outside the Python module.
     all_fits_csv_tf = tempfile.NamedTemporaryFile(suffix='.csv', delete=False,
