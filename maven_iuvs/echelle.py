@@ -2552,7 +2552,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
         fit_IPH_component = check_whether_IPH_fittable(mean_mrh, i)
 
         result_vec = fit_H_and_D(initial_guess, wavelengths, spectrum[i, :], light_fits, theCLSF, unc=data_unc[i, :], \
-                                 BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, fitter=fitter, **kwargs)
+                                 frame_is_good=i not in bad_frames, BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, fitter=fitter, **kwargs)
 
         if return_each_line_fit:
             fit_params, I_fit, fit_1sigma, H_fit, D_fit, IPH_fit = result_vec
@@ -2624,7 +2624,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
 
 
 def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
-                fit_IPH_component=False, BU_bg=np.nan,
+                fit_IPH_component=False, BU_bg=np.nan, frame_is_good=True,
                 fitter="dynesty", solver="Powell", verbose=False,
                 approach="static", livepts=50, bound="multi", bootstrap=0,
                 hush_warning=True, make_dynesty_plots=False):
@@ -2700,12 +2700,25 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
         BU_bg_jnp = jnp.array(BU_bg)
     else: 
         BU_bg_jnp = jnp.nan
-        
+
+    # Get correlation kernel for this binning, multiply by covariance,
+    # and invert - saves time and avoids slowing down the fit.
+    if frame_is_good:
+        corr_kernel = get_kernel_array(n_wave_bins=len(wavelengths))
+        covmat_inv = np.linalg.inv(corr_kernel * np.outer(unc, unc))
+    else:
+        # In the event the frame is already known to be bad, fall back to an all-1s
+        # array, assuming no inter-bin correlation. This is okay since the fit
+        # won't proceed due to the badness of the frame (usually all NaN).
+        covmat_inv = np.ones((len(wavelengths), len(wavelengths)))
+
+    # Set up arguments
     objfn_args = (jnp.array(wavelengths), jnp.array(edges), jnp.array(CLSF),
-                  jnp.array(spec, dtype=jnp.float64), jnp.array(unc, dtype=jnp.float64), 
+                  jnp.array(spec, dtype=jnp.float64), jnp.array(unc, dtype=jnp.float64),
+                  jnp.array(covmat_inv, dtype=jnp.float64),
                   BU_bg_jnp, fit_IPH_component)
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
-
+    
     # Now call the fitting routine
     # Scalers for some of the initial guess parameters, to be used by both 
     # scipy and dynesty.
@@ -3079,6 +3092,55 @@ def make_fit_param_dict(thelist, is_fitparams=True):
     return param_dict
 
 
+def get_kernel_array(n_wave_bins=332):
+    """
+    Construct a matrix from the bespoke correlation kernel that describes 
+    correlation between wavelength bins. See comments below for details on how.
+
+    Parameters
+    ----------
+    n_wave_bins : int
+                          what it says on the tin. Currently we don't have a 
+                          kernel for other wavelength binning mostly because we
+                          have never done any other wavelength binning. AFAWK.
+
+    Returns
+    ----------
+    kernel_array : numpy array
+                   Square array of shape (n_wave_bins, n_wave_bins), where each
+                   entry is the correlation between data bin i and data bin j,
+                   where i and j are indices along the flat array of data vs. 
+                   wavelength
+    """
+    if n_wave_bins != 332:
+        raise ValueError("Warning! We need to construct a kernel for other " \
+                         "binning. This file has n_wave_bins={n_wave_bins}.")
+    # Correlation kernel - made by Mike
+    kernel = np.array([1.00000000e+00, 3.81597163e-01, 2.02042575e-01, 1.31219735e-01,
+                    8.65372128e-02, 6.51347338e-02, 5.72377976e-02, 4.94840769e-02,
+                    4.75094664e-02, 4.24771659e-02, 4.13186867e-02, 3.71474974e-02,
+                    3.70467190e-02, 3.35355504e-02, 3.36457871e-02, 3.03350132e-02,
+                    3.02464225e-02, 2.71446379e-02, 2.69564532e-02, 2.39475146e-02,
+                    2.43829937e-02, 2.11826523e-02, 2.13704591e-02, 1.89614960e-02,
+                    1.93592340e-02, 1.61692421e-02, 1.60018720e-02, 1.33394775e-02,
+                    1.35330879e-02, 1.07173005e-02, 1.08148758e-02, 7.94474446e-03,
+                    7.94698678e-03, 5.07449876e-03, 5.54789292e-03, 3.12420152e-03,
+                    3.47598772e-03, 1.60254087e-04, 4.80756100e-04, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0]) 
+
+    # Fill 0's for remaining elements up to n_wave_bins. 
+    padded_kernel = np.pad(kernel, (0, n_wave_bins-len(kernel)))
+    # Mirror the kernel at the back end of this vector so that the first 
+    # column in the array will have a 1 in the top left, allowing us to put 
+    # 1's along the diagonal.
+    padded_kernel[-(len(kernel)-1):] = np.flip(kernel)[:-1]
+    kernel_array = np.zeros((n_wave_bins, n_wave_bins))
+    # Fill each column of array with the full kernel vector, shifted by i 
+    # places toward the "right" (or end). 
+    for i in range(len(padded_kernel)):
+        kernel_array[:, i] = np.roll(padded_kernel, i)
+    return kernel_array
+    
 # Background stuff ------------------------------------------------------------
 
 def make_array_of_fitted_backgrounds(light_fits, fit_params, fitted_integrations):
@@ -3207,11 +3269,17 @@ def negloglikelihood(params, *args):
 # Use CPU to avoid overloading graphics memory:
 jax_config.update('jax_platform_name', 'cpu')
 
-negloglikelihood_jit = jax.jit(negloglikelihood, static_argnums=[7])
-negloglikelihood_jacobian_jit = jax.jit(jax.jacobian(negloglikelihood, argnums=0), static_argnums=[7])
-negloglikelihood_hessian_jit = jax.jit(jax.hessian(negloglikelihood, argnums=0), static_argnums=[7])
+# The value in static_argnums needs to correspond to the position of 
+# fit_IPH_component, which is a boolean, in the declaration of loglikelihood,
+# including the position of the params argument, zero-indexed.
+fit_IPH_arg_pos = 8
+negloglikelihood_jit = jax.jit(negloglikelihood, static_argnums=[fit_IPH_arg_pos])
+negloglikelihood_jacobian_jit = jax.jit(jax.jacobian(negloglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
+negloglikelihood_hessian_jit = jax.jit(jax.hessian(negloglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
 
-def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU_bg, fit_IPH_component):
+
+def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, 
+                  covmat_inv, BU_bg, fit_IPH_component):
     """
     Retrieves the model of the lineshape to fit and the associated log likelihood, 
     assuming a Gaussian distributed quantity with independent uncertainties).
@@ -3241,6 +3309,12 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
            spectrum in DN that will be fit
     uncertainty : int or array
                   DN uncertainty on the spectrum
+    covmat_inv : array
+                 Inverse of the correlation matrix * covariance matrix. 
+                 Replacement for "uncertainty **2" in the log likelihood, 
+                 representing an upgrade where counts in bins are no longer 
+                 assumed to be completely independent.  
+                 See get_kernel_array() for more information on the math.
     BU_bg : array
             An alternate background, constructed as described in Mayyasi+2023.
     fit_IPH_component : bool
@@ -3256,17 +3330,20 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, BU
     DN_fit, *_ = lineshape_model(params, wavelength_data, binedges, CLSF, BU_bg, fit_IPH_component)
 
     N = len(DN_fit)
-    # Fit the model to the existing data assuming Gaussian distributed photo events
+    # Fit the model to the existing data assuming Gaussian distributed photo 
+    # events, but with correlation between wavelength bins within a certain 
+    # distance of one another.
 
     L = - (N/2)*jnp.log(2*math.pi) \
         - jnp.sum(jnp.log(uncertainty) \
-                  + (  (data - DN_fit)**2 / (2*(uncertainty**2))  )
+                  + ( 0.5 * (data - DN_fit) * jnp.matmul(covmat_inv, (data - DN_fit)) )
                  )
+
     return L
 
-loglikelihood_jit = jax.jit(loglikelihood, static_argnums=[7])
-loglikelihood_jacobian_jit = jax.jit(jax.jacobian(loglikelihood, argnums=0), static_argnums=[7])
-loglikelihood_hessian_jit = jax.jit(jax.hessian(loglikelihood, argnums=0), static_argnums=[7])
+loglikelihood_jit = jax.jit(loglikelihood, static_argnums=[fit_IPH_arg_pos])
+loglikelihood_jacobian_jit = jax.jit(jax.jacobian(loglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
+loglikelihood_hessian_jit = jax.jit(jax.hessian(loglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
 
 def lineshape_model(params, wavelength_data, binedges, theCLSF, BU_bg, fit_IPH_component):
     """
