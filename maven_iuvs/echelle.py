@@ -2289,7 +2289,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
 
         return IDL_status
 
-    return None
+    return fit_params_kR, fit_unc_kR
 
 
 # Set up fit parameter and uncertainty names; Here to allow Jax to work.
