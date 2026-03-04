@@ -3130,15 +3130,22 @@ def get_kernel_array(n_wave_bins=332):
 
     # Fill 0's for remaining elements up to n_wave_bins. 
     padded_kernel = np.pad(kernel, (0, n_wave_bins-len(kernel)))
-    # Mirror the kernel at the back end of this vector so that the first 
-    # column in the array will have a 1 in the top left, allowing us to put 
-    # 1's along the diagonal.
-    padded_kernel[-(len(kernel)-1):] = np.flip(kernel)[:-1]
     kernel_array = np.zeros((n_wave_bins, n_wave_bins))
-    # Fill each column of array with the full kernel vector, shifted by i 
-    # places toward the "right" (or end). 
+    
     for i in range(len(padded_kernel)):
+        # Fill each column of array with the full kernel vector, shifted by i
+        # places toward the "right" (or end).
         kernel_array[:, i] = np.roll(padded_kernel, i)
+
+        # Mirror values above diagonal
+        if i <= len(kernel)-1:
+            mirrored_partial_kernel = np.flip(kernel[1:1+i])
+            kernel_array[:i, i] = mirrored_partial_kernel
+        if i >= len(kernel):
+            # After a certain point we have to add more zeros
+            mirrored_kernel_padded = np.flip(np.pad(kernel[1:], (0, i-len(kernel[1:]))))
+            kernel_array[:i, i] = mirrored_kernel_padded
+
     return kernel_array
     
 # Background stuff ------------------------------------------------------------
