@@ -330,7 +330,7 @@ def quicklook_figure_skeleton(N_thumbs, figsz=(44, 24), thumb_cols=10, aspect=1)
 
 def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None, 
                        show=True, savefolder=None, figsz=(42, 26), fs="large", 
-                       useframe="coadded", cmap=None,
+                       useframe="coadded", cmap=None, calibration="v15",
                        arange=None, prange=None, special_prange=[0, 65], 
                        show_DN_histogram=False, img_dpi=96, 
                        overwrite=False, overwrite_prior_to=datetime.datetime.now()):
@@ -483,7 +483,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
                                             coadded=True)
         # Now must transform it back to a 1D vector rather than a 2D array.
         initial_guess = np.ndarray.flatten(initial_guess)
-        lsfx_nm, lsf_f = load_lsf(calibration="new")
+        lsfx_nm, lsf_f = load_lsf(calibration=calibration)
         theCLSF = CLSF_from_LSF(lsfx_nm, lsf_f)
         mean_mrh = get_mean_mrh(light_fits)
         fit_IPH_component = [check_whether_IPH_fittable(mean_mrh, i) for i in range(n_ints)]

@@ -2050,7 +2050,7 @@ def get_ech_slit_indices(light_fits):
 
 def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c_savepath, 
                        process_timestamp=None,
-                       calibration="new", ints_to_fit="all", remove_artifacts=True,
+                       calibration="v15", ints_to_fit="all", remove_artifacts=True,
                        save_arrays=False, place_for_arrays=None, 
                        return_each_line_fit=True, 
                        use_BU_bg=False, fitter='dynesty', 
@@ -2087,8 +2087,8 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                         20170131T050459. Will be added to IDL-produced log files.
                         Easier to determine in Python.
     calibration : string
-                  "new" or "old": whether to compare use new or old calibration values 
-                  for the LSF and binning.
+                  "v15", "v14", "v13": Manages some calibration of DN and bins,
+                  also the LSF that is used
     ints_to_fit : int, string, or list
                   Integrations to perform the fit on. 
                   int --> will pick a specific integration by index in file.
@@ -2217,6 +2217,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     
     # Do basic fit in DN
     I_fit, H_fit, D_fit, IPH_fit, fit_params, fit_uncertainties = fit_flat_data(light_fits, spectrum, data_unc, 
+                                                                                calibration=calibration,
                                                                                 BU_bg=precalc_bg, fitter=fitter,
                                                                                 bad_frames=i_badlights, 
                                                                                 ints_to_fit=ints_to_fit,
@@ -2313,13 +2314,13 @@ _fit_parameter_background_idxs = [i for i, name in enumerate(_fit_parameter_name
 _fit_parameter_non_background_idxs = np.setdiff1d(range(0, len(_fit_parameter_names)), _fit_parameter_background_idxs)
 
 
-def get_binning_df(calibration="new"):
+def get_binning_df(calibration="v14"):
     """
     Old way of determining numbers to use for binning. TODO: Delete this and
     update any code that relies on it to use the methods used in updated fit routines
     """
 
-    if calibration=="new": 
+    if calibration=="v14": 
         return pd.DataFrame({  
                                 "Nspa": [18, 50, 159, 92, 64, 74, 1024],
                                 "Nspe": [201, 160, 160, 512, 384, 332, 1024],
@@ -2338,7 +2339,7 @@ def get_binning_df(calibration="new"):
                                                 [0, 13-1, 30+3, 30+5], 
                                                 [27, 346-11, 535+11, 535+43]]
                             })
-    elif calibration=="old": 
+    elif calibration=="v13": 
         return pd.DataFrame({"Nspa":          [18,  50,  159, 92,  64,  74,  1024],
                             "Nspe":          [201, 160, 160, 512, 384, 332, 1024],
                             "NbinsY":        [38,  11,  5,   11,  11,  11,  1], 
@@ -2361,7 +2362,7 @@ def get_binning_df(calibration="new"):
 # Conversion functions ========================================================
 
 def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_params, fit_uncertainties, 
-                              fitted_integrations, calibration="new"): 
+                              fitted_integrations, calibration="v15"): 
     """
     Given model fitting output, this converts it to physical units.
 
@@ -2417,18 +2418,33 @@ def convert_to_physical_units(light_fits, arrays_to_convert_to_kR_pernm, fit_par
     return arrays_in_kR_pernm, fit_params_converted, fit_unc_converted
 
 
-def get_conversion_factors(t_int, binwidth_nm, calibration="new"):
+def get_conversion_factors(t_int, binwidth_nm, calibration="v15"):
     """
     Identify and return the appropriate conversion factors for the data.
+    
+    Parameters
+    ----------
+    t_int : int
+            Integer number of seconds per integration
+    binwidth_nm : array
+                  width in nm of each bin in wavelength space
+    calibration : string
+                  "v15", "v14", "v13". Function will return slightly different
+                  conversion factors depending on version since the old IDL 
+                  pipeline (v13) and a different calibration factor due to 
+                  using SWAN instead of HST.
     """
-    Aeff =  32.327455  # Median and mode value of effective area of the 
-                       # instrument. In reality the value shouldn't change, 
+    Aeff =  32.327455  # Median and mode value of effective area of the
+                       # instrument. In reality the value shouldn't change,
                        # but does somewhat probably due to other variations in
-                       # the IDL pipeline process.
+                       # the IDL pipeline process. This is an average 
+                       # applicable to many observations though (found by 
+                       # printing it out directly from IDL pipeline over 
+                       # thousands of files)
 
-    if calibration=="new":
+    if calibration=="v14" or calibration=="v15":
         conv_to_kR_with_LSFunit = ech_LSF_unit / (t_int)
-    elif calibration=="old":
+    elif calibration=="v13":
         Ph_pers_perkR = 29.8 # Average calibration factor WRT SWAN (Mayyasi+ 2017)
         Adj_Factor = 1# 100/88  # This factor is used in IDL, but it accounts for the fact that the method used is not flux-conservative.
                                 # We are using a conservative fit method so we don't need it, but I'm placing it here just in case
@@ -2436,7 +2452,9 @@ def get_conversion_factors(t_int, binwidth_nm, calibration="new"):
         conv_to_kR_with_LSFunit = Adj_Factor / (t_int * Ph_pers_perkR)
 
     conv_to_kR_per_nm = 1 / (t_int * binwidth_nm * Aeff)
-    conv_to_kR = 1 / (t_int * Aeff) # This only works if the same binning for wavelengths has been used throughout mission (which it has thus far, as of 2025)
+    conv_to_kR = 1 / (t_int * Aeff) # This only works if the same binning for 
+                                    # wavelengths has been used throughout mission 
+                                    # (which is true)
 
     return conv_to_kR_per_nm, conv_to_kR_with_LSFunit, conv_to_kR
 
@@ -2444,7 +2462,7 @@ def get_conversion_factors(t_int, binwidth_nm, calibration="new"):
 # Line fitting ================================================================
 
 def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynesty",
-                  calibration="new", return_each_line_fit=True, ints_to_fit="all",
+                  calibration="v15", return_each_line_fit=True, ints_to_fit="all",
                   BU_bg=np.nan, **kwargs):
     """
     Parameters
@@ -2459,8 +2477,8 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
                  If provided contains indices of broken frames that can't 
                  be fit.
     calibration : string
-                  "new" or "old": whether to compare use the new or old LSF, and 
-                  newer or older set of pixel and binning information.
+                  "v15", "v14", "v13": Manages some calibration of DN and bins,
+                  also the LSF that is used
     return_each_line_fit : boolean
                            Whether to return the parts of the model fit specific to H and D--useful for
                            making certain plots.
@@ -3224,9 +3242,29 @@ def background(lamda, lamda_c, b, m, m2=0):
             + m2 * wavefrac * wavefrac)
 
 
-def make_BU_background(data_cube, bg_inds, n_int, binning_param_dict, calibration="new"):
+def make_BU_background(data_cube, bg_inds, n_int, binning_param_dict, calibration="v14"):
     """
-    Construct a BU-style background.
+    Construct a background per Mayyasi+ 2023
+
+    Parameters
+    ----------
+    data_cube : 3D array
+                Array of DN on the detector data cube, integrations x spatial x spectral
+    bg_inds : array
+              Output of get_binning_df for this file's binning.
+    n_int : int
+            Number of integrations this file
+    binning_param_dict : dictionary
+                         Full dictionary for all binning schemes from get_binning_df
+    calibration : string
+                  "v15", "v14", "v13": Manages some calibration of DN and bins,
+                  also the LSF that is used
+
+    Returns
+    ----------
+    backgrounds_by_frame : array
+                           Array of shape (n_int, n_spe) where each row is the 
+                           background for integration i.
     """
 
     # BU BG - construct an alternative background the same way as is done in the BU pipeline. ~~~~~~~~~~~~~~~~~~~~
@@ -3234,40 +3272,40 @@ def make_BU_background(data_cube, bg_inds, n_int, binning_param_dict, calibratio
     # process of cleaning the data of rays and hot pixels produces ever so slightly different results, 
     # but it's done this way because the background is constructed after cleanup in the IDL pipeline.
 
-    if calibration=="new":
+    if calibration=="v15" or calibration=="v14":
         back_below = np.sum(data_cube[:, bg_inds[0]:bg_inds[1]+1, :], axis=1) / (bg_inds[1] - bg_inds[0] + 1)
         back_above = np.sum(data_cube[:, bg_inds[2]:bg_inds[3]+1, :], axis=1) / (bg_inds[3] - bg_inds[2] + 1)
 
-        backgrounds_newcal = np.zeros((data_cube.shape[0], data_cube.shape[2]))
+        backgrounds_by_frame_temp = np.zeros((data_cube.shape[0], data_cube.shape[2]))
 
         # Set up stuff for median filter
-        bg_newcal_median_filtered = np.zeros_like(backgrounds_newcal) # equivalent to IDL's "med_bk"
+        backgrounds_by_frame = np.zeros_like(backgrounds_by_frame_temp) # equivalent to IDL's "med_bk"
         margin = 7 # for a total window size of 15. 
 
         for i in range(n_int):
-            backgrounds_newcal[i, :] = (back_above[i, :] + back_below[i, :]) / 2. # equivalent to IDL "avg_bk" .average the above-slit and below-slit slices
+            backgrounds_by_frame_temp[i, :] = (back_above[i, :] + back_below[i, :]) / 2. # equivalent to IDL "avg_bk" .average the above-slit and below-slit slices
 
             # Now do the sliding median window (width 15)
-            bg_newcal_median_filtered[i, 0:margin] = backgrounds_newcal[i, 0:margin] # IDL ignores the first margin points and doesn't change them.
-            bg_newcal_median_filtered[i, -margin:] = backgrounds_newcal[i, -margin:] # It also ignores the last margin points.
-            for k in range(margin, len(backgrounds_newcal[i, :])-margin):
+            backgrounds_by_frame[i, 0:margin] = backgrounds_by_frame_temp[i, 0:margin] # IDL ignores the first margin points and doesn't change them.
+            backgrounds_by_frame[i, -margin:] = backgrounds_by_frame_temp[i, -margin:] # It also ignores the last margin points.
+            for k in range(margin, len(backgrounds_by_frame_temp[i, :])-margin):
                 # The window size is 15 in IDL, so this usage of median should return the same values.
                 # There is only a discrepancy if the window size is even, since /EVEN is not set in the IDL pipeline.
-                bg_newcal_median_filtered[i, k] = np.median(backgrounds_newcal[i, k-margin:k+margin+1])
-            bg_newcal_median_filtered[i, :] *= (binning_param_dict['aprow2'].values[0] - binning_param_dict['aprow1'].values[0] + 1)
+                backgrounds_by_frame[i, k] = np.median(backgrounds_by_frame_temp[i, k-margin:k+margin+1])
+            backgrounds_by_frame[i, :] *= (binning_param_dict['aprow2'].values[0] - binning_param_dict['aprow1'].values[0] + 1)
 
-        return bg_newcal_median_filtered
+        return backgrounds_by_frame
 
-    elif calibration=="old":
+    elif calibration=="v13":
         # This one is currently not returning the right values, I think
         Nbacks = bg_inds[1] - bg_inds[0] + 1 + bg_inds[3] - bg_inds[2] + 1 # these correspond to yback1 ...yback 4 in IDL
-        backgrounds_oldcal = np.zeros((data_cube.shape[0], data_cube.shape[2]))
+        backgrounds_by_frame = np.zeros((data_cube.shape[0], data_cube.shape[2]))
         for i in range(n_int):
             back_below_i = np.sum(data_cube[i, bg_inds[0]:bg_inds[1]+1, :], axis=0)  # Yes it really is axis 0 not 1
             back_above_i = np.sum(data_cube[i, bg_inds[2]:bg_inds[3]+1, :], axis=0) 
-            backgrounds_oldcal[i, :] = ( back_below_i + back_above_i ) / Nbacks 
+            backgrounds_by_frame[i, :] = ( back_below_i + back_above_i ) / Nbacks 
 
-        return backgrounds_oldcal
+        return backgrounds_by_frame
 
 
 # Objective functions and Lineshape Model -------------------------------------
@@ -3519,19 +3557,25 @@ def CLSF_from_LSF(LSFx, LSFy):
     return cumulative
 
 
-def load_lsf(calibration="new"):
+def load_lsf(calibration="v15"):
     """
-    Load appropriate LSF
+    Load the LSF for a given calibration. (v14 = IDL pipeline finalized by BU; 
+    v15 = Python pipeline, CU/LASP)
     """
-    lsf = sp.io.readsav(f"{idl_pipeline_dir}/lsf_{calibration}.idl", idict=None, python_dict=False)
-    sav_var_names = {"new": ["echw", "echf"], 
-                     "old": ["w", "f"]
-                    }[calibration]
-    
-    lsfx_nm = lsf[sav_var_names[0]] / 10 # convert wavelength to nm, not angstrom
-    lsf_f = lsf[sav_var_names[1]]
+    if calibration=="v14" or calibration=="v13":
+        lsf_v14 = sp.io.readsav(f"{idl_pipeline_dir}/lsf_new.idl", idict=None, python_dict=False)
+        sav_var_names = {"v14": ["echw", "echf"], 
+                        "v13": ["w", "f"]
+                        }[calibration]
+        
+        lsf_bincenters_nm = lsf_v14[sav_var_names[0]] / 10 # convert wavelength to nm, not angstrom
+        lsf_peak_normalized = lsf_v14[sav_var_names[1]]
+    elif calibration=="v15":
+        lsf_v15 = np.load(f"{iuvs.__path__[0]}/ancillary/lsf_v15.npy", allow_pickle=True).item()
+        lsf_bincenters_nm = lsf_v15['wavelength_bin_center_nm']
+        lsf_peak_normalized = lsf_v15['peak_normalized_LSF']
 
-    return lsfx_nm, lsf_f
+    return lsf_bincenters_nm, lsf_peak_normalized
 
 
 # Functions that help flatten arrays ==========================================
