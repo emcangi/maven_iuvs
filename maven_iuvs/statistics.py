@@ -2,15 +2,17 @@ import numpy as np
 from sklearn import linear_model
 import math
 
-def chisquared(LL, sigma, p=0, reduced=False):
+def chisquared(LL, N, logdetcov, p=0, reduced=False):
     """
     Computes chisquared given some log likelihood.
     Parameters
     ----------
         LL : int or float
              Log likelihood computed by fit algorithm
-        sigma : array
-                vector of data uncertainties for every bin
+        N : int
+            number of bins in our case
+        logdetcov : array
+                 log-determinant of the covariance (correlation * unc^2)
         p : int
             number of model parameters, used to compute reduced chisq
         reduced : bool
@@ -21,41 +23,12 @@ def chisquared(LL, sigma, p=0, reduced=False):
     chisq : float
             chi squared value, normal or reduced.
     """
-    N = len(sigma)
 
-    chisq = -2 * (LL + (N/2)*np.log(2*math.pi) +np.sum(np.log(sigma)))
-    # Note that the middle term reduces to N log(σ) in the event all σ are the same.
+    chisq = -2 * (LL + (N/2)*np.log(2*math.pi) + 0.5 * logdetcov)
+
     if reduced:
         return chisq * (1/(N-p))
-    return chisq
 
-
-def chisquared_standard(m, d, sigma, p=0, reduced=False):
-    """
-    More typical computation of chi squared
-    Parameters
-    ----------
-        m : array
-            modeled values
-        d : array
-            data values
-        sigma : array
-                vector of data uncertainties for every bin
-        p : int
-            number of model parameters, used to compute reduced chisq
-        reduced : bool
-                  False > returns normal chi squared. True > returns reduced
-
-    Returns
-    ----------
-    chisq : float
-            chi squared value, normal or reduced.
-    """
-    N = len(sigma)
-
-    chisq = np.sum( (m-d)**2 / (sigma**2) ) 
-    if reduced:
-        return chisq * (1/(N-p))
     return chisq
 
 

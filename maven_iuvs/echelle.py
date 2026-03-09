@@ -2550,9 +2550,26 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
 
         # Determine whether line-of-sight minimum ray height is large enough to fit an IPH component
         fit_IPH_component = check_whether_IPH_fittable(mean_mrh, i)
+        
+        # precompute the correlation kernel and covariance matrix
+        # Get correlation kernel for this binning, multiply by covariance for
+        # this frame, and invert it to precompute the denominator of the 
+        # expontential
+        if i not in bad_frames:
+            corr_kernel = get_kernel_array(n_wave_bins=len(wavelengths))
+            covmat = corr_kernel * np.outer(data_unc[i, :], data_unc[i, :])
+            logdet_covmat = np.linalg.slogdet(covmat).logabsdet
+            covmat_inv = np.linalg.inv(covmat)
+        else:
+            # If the frame is already known to be bad, fall back to all 1's in
+            # the covariance inverse, and set log(det(covariance)) to 1. This
+            # is okay since the fit will quit if the frame is bad.
+            logdet_covmat = 1
+            covmat_inv = np.ones((len(wavelengths), len(wavelengths)))
 
-        result_vec = fit_H_and_D(initial_guess, wavelengths, spectrum[i, :], light_fits, theCLSF, unc=data_unc[i, :], \
-                                 frame_is_good=i not in bad_frames, BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, fitter=fitter, **kwargs)
+        result_vec = fit_H_and_D(initial_guess, wavelengths, spectrum[i, :], light_fits, theCLSF, data_unc[i, :], \
+                                 covmat_inv, logdet_covmat, 
+                                 BU_bg=BU_bg_i, fit_IPH_component=fit_IPH_component, fitter=fitter, **kwargs)
 
         if return_each_line_fit:
             fit_params, I_fit, fit_1sigma, H_fit, D_fit, IPH_fit = result_vec
@@ -2594,14 +2611,16 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
             fit_params_dict['maxLL'] = fit_params[-1]
 
         # Compute chi squared
-        fit_params_dict['minchisq'] = chisquared(fit_params_dict['maxLL'], 
-                                                 data_unc[i, :],
-                                                 p=len(initial_guess), 
+        fit_params_dict['minchisq'] = chisquared(fit_params_dict['maxLL'],
+                                                 len(wavelengths),
+                                                 logdet_covmat,
+                                                 p=len(initial_guess),
                                                  reduced=False)
-        fit_params_dict['reduced_chisq'] = chisquared(fit_params_dict['maxLL'], 
-                                                        data_unc[i, :],
-                                                        p=len(initial_guess), 
-                                                        reduced=True)
+        fit_params_dict['reduced_chisq'] = chisquared(fit_params_dict['maxLL'],
+                                                      len(wavelengths),
+                                                      logdet_covmat,
+                                                      p=len(initial_guess),
+                                                      reduced=True)
 
         if i in bad_frames:
             fit_params_dict["failed_fit"] = True
@@ -2623,8 +2642,9 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
     return I_fit_array, H_fit_array, D_fit_array, IPH_fit_array, fit_params_dicts, fit_unc_dicts
 
 
-def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
-                fit_IPH_component=False, BU_bg=np.nan, frame_is_good=True,
+def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc,
+                covmat_inv, logdet_covmat, 
+                fit_IPH_component=False, BU_bg=np.nan,
                 fitter="dynesty", solver="Powell", verbose=False,
                 approach="static", livepts=50, bound="multi", bootstrap=0,
                 hush_warning=True, make_dynesty_plots=False):
@@ -2701,21 +2721,10 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc=1,
     else: 
         BU_bg_jnp = jnp.nan
 
-    # Get correlation kernel for this binning, multiply by covariance,
-    # and invert - saves time and avoids slowing down the fit.
-    if frame_is_good:
-        corr_kernel = get_kernel_array(n_wave_bins=len(wavelengths))
-        covmat_inv = np.linalg.inv(corr_kernel * np.outer(unc, unc))
-    else:
-        # In the event the frame is already known to be bad, fall back to an all-1s
-        # array, assuming no inter-bin correlation. This is okay since the fit
-        # won't proceed due to the badness of the frame (usually all NaN).
-        covmat_inv = np.ones((len(wavelengths), len(wavelengths)))
-
     # Set up arguments
     objfn_args = (jnp.array(wavelengths), jnp.array(edges), jnp.array(CLSF),
                   jnp.array(spec, dtype=jnp.float64), jnp.array(unc, dtype=jnp.float64),
-                  jnp.array(covmat_inv, dtype=jnp.float64),
+                  jnp.array(covmat_inv, dtype=jnp.float64), jnp.array(logdet_covmat, dtype=jnp.float64),
                   BU_bg_jnp, fit_IPH_component)
     lineshape_model_args = (wavelengths, edges, CLSF, BU_bg, fit_IPH_component)
     
@@ -3279,14 +3288,14 @@ jax_config.update('jax_platform_name', 'cpu')
 # The value in static_argnums needs to correspond to the position of 
 # fit_IPH_component, which is a boolean, in the declaration of loglikelihood,
 # including the position of the params argument, zero-indexed.
-fit_IPH_arg_pos = 8
+fit_IPH_arg_pos = 9
 negloglikelihood_jit = jax.jit(negloglikelihood, static_argnums=[fit_IPH_arg_pos])
 negloglikelihood_jacobian_jit = jax.jit(jax.jacobian(negloglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
 negloglikelihood_hessian_jit = jax.jit(jax.hessian(negloglikelihood, argnums=0), static_argnums=[fit_IPH_arg_pos])
 
 
 def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty, 
-                  covmat_inv, BU_bg, fit_IPH_component):
+                  covmat_inv, logdet_covmat, BU_bg, fit_IPH_component):
     """
     Retrieves the model of the lineshape to fit and the associated log likelihood, 
     assuming a Gaussian distributed quantity with independent uncertainties).
@@ -3322,6 +3331,9 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty,
                  representing an upgrade where counts in bins are no longer 
                  assumed to be completely independent.  
                  See get_kernel_array() for more information on the math.
+    logdet_covmat : array
+                  Natural log of the determinant of the covariance matrix (correlation kernel * sigma^2).
+                  Regular determinant produces overflow error.
     BU_bg : array
             An alternate background, constructed as described in Mayyasi+2023.
     fit_IPH_component : bool
@@ -3342,9 +3354,8 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty,
     # distance of one another.
 
     L = - (N/2)*jnp.log(2*math.pi) \
-        - jnp.sum(jnp.log(uncertainty) \
-                  + ( 0.5 * (data - DN_fit) * jnp.matmul(covmat_inv, (data - DN_fit)) )
-                 )
+        - 0.5 * logdet_covmat \
+        - 0.5 * jnp.sum((data-DN_fit) * jnp.matmul(covmat_inv, (data-DN_fit)))
 
     return L
 
