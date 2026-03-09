@@ -2526,7 +2526,7 @@ def fit_flat_data(light_fits, spectrum, data_unc, bad_frames=None, fitter="dynes
         bad_frames = []
 
     # Loop over integrations to do the fits
-    for i in range(0, get_n_int(light_fits)):
+    for i in tqdm(range(0, get_n_int(light_fits))):
 
         if i not in ints_to_fit:
             # If we don't want to fit this integration, fill in nonsense for the 
@@ -3123,7 +3123,7 @@ def get_kernel_array(n_wave_bins=332):
     """
     if n_wave_bins != 332:
         raise ValueError("Warning! We need to construct a kernel for other " \
-                         "binning. This file has n_wave_bins={n_wave_bins}.")
+                         f"binning. This file has n_wave_bins={n_wave_bins}.")
     # Correlation kernel - made by Mike
     kernel = np.array([1.00000000e+00, 3.81597163e-01, 2.02042575e-01, 1.31219735e-01,
                     8.65372128e-02, 6.51347338e-02, 5.72377976e-02, 4.94840769e-02,
