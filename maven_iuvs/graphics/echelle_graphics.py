@@ -20,7 +20,7 @@ from maven_iuvs.echelle import make_dark_index, downselect_data, add_in_quadratu
     get_wavelengths, get_spectrum, load_lsf, CLSF_from_LSF, ran_DN_uncertainty, \
     get_ech_slit_indices, make_fit_param_dict, check_whether_IPH_fittable, \
     convert_to_physical_units, find_bad_dark_frames, find_bad_light_frames, \
-    get_dark_from_keyfile
+    get_dark_from_keyfile, get_kernel_array
 from maven_iuvs.geometry import get_mean_mrh
 from maven_iuvs.graphics import color_dict, make_sza_plot, \
      make_tangent_lat_lon_plot, make_alt_plot
@@ -489,14 +489,22 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
         fit_IPH_component = [check_whether_IPH_fittable(mean_mrh, i) for i in range(n_ints)]
         fit_IPH = True if any(fit_IPH_component) else False
 
+        # Get the correlation kernel and covariance matrix 
+        corr_kernel = get_kernel_array(n_wave_bins=len(wl))
+        covmat = corr_kernel * np.outer(coadded_unc_spec, coadded_unc_spec)
+        logdet_covmat = np.linalg.slogdet(covmat).logabsdet
+        covmat_inv = np.linalg.inv(covmat)
+
         # This keeps track of whether fitting H and D succeeded - not whether the whole quicklook process succeeds
         fit_succeeded = True
         try:
             fit_params, I_fit, fit_1sigma, *_ = fit_H_and_D(initial_guess, wl,
                                                             coadded_spec,
                                                             light_fits, theCLSF,
+                                                            coadded_unc_spec,
+                                                            covmat_inv,
+                                                            logdet_covmat,
                                                             fit_IPH_component=fit_IPH,
-                                                            unc=coadded_unc_spec, 
                                                             solver="Powell", 
                                                             fitter="dynesty", 
                                                             hush_warning=True)
