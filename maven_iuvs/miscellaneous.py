@@ -82,11 +82,11 @@ def find_nearest(array, value, price_is_right=False):
     array : array
     value : float
     price_is_right : bool
-                     If true, finds the nearest entry to v in array that isn't 
-                     larger than value.
+                     If true, finds the nearest entry to value in array that 
+                     isn't larger than value.
     """
     if price_is_right:
-        idx = np.argmax(array[np.where(array - value <= 0)[0]] - value)
+        idx = np.argmax(array[np.where(array - value <= 0)])
     else:
         array = np.asarray(array)
         idx = (np.abs(array - value)).argmin()
