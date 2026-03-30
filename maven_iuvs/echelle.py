@@ -1349,7 +1349,12 @@ def get_dark_frames(dark_fits):
     elif n_ints_dark > 2:
         # If there's more than 2, we can just take the element-wise mean of frames 2:end. Ignore nans.
         darks[0, :, :] = dark_fits['Primary'].data[0]
-        darks[1, :, :] = np.nanmean(dark_fits['Primary'].data[1:, :, :], axis=0)
+        # find any frames with nans and throw them out
+        badframes = np.unique(np.where(np.isnan(dark_fits['Primary'].data[1:, :, :]))[0])
+        # We can't just do "~badframes" to get the good ones because it just multiplies by -1.
+        # So take the difference of the sets of all the frame numbers except 0 and bad frames.
+        goodframes = np.array(list(set(np.arange(1, dark_fits['Primary'].data[1:, :, :].shape[0])).difference(badframes)))
+        darks[1, :, :] = np.mean(dark_fits['Primary'].data[goodframes, :, :], axis=0)
 
     return darks
 
