@@ -17,7 +17,7 @@ from maven_iuvs.miscellaneous import uniqueID_RE, orbit_folder, iuvs_orbno_from_
 def build_cache(orbfold=None, cache={}, exclude_xml=True, exclude_dark=True, exclude_txt=True,
                 basefolder="/media/emc/ExtremePro/IUVS/IUVS_Data/l1c_ech_data/FMR_v15/DynestyAWS/"):
     """
-    Given an orit folder orbfold, will fill the cache with all the files there.
+    Given an orbit folder orbfold, will fill the cache with all the files there.
     No sorting.
     
     Parameters
