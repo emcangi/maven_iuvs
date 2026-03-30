@@ -1248,9 +1248,21 @@ def subtract_darks(light_fits, darks, bad_darks, bad_lights, set_bad_frames_to_n
                  of find_bad_light_frames().
     set_bad_frames_to_nan : bool
                             If True, any frames with a problem will be set to 
-                            all nans. True is the safest option to avoid fitting
-                            bad data. 
-                            Can be set to False for quicklook generation.
+                            all nans. 
+                            
+                            Should be set to True for all calls where
+                            fitting of the brightness model to data is happening.
+                            This prevents the pipeline from trying to fit any 
+                            data post-dark subtraction that has ANY sort of 
+                            problem (nan regions on the detector, saturation,
+                            keyhole/MUV contamination) and coming up with garbage
+                            output. 
+                              
+                            Set to False within Quicklook code so that the
+                            Quicklook thumbnails will show the dark-subtracted
+                            data including any nan regions or other 
+                            detector issues so that we can see at a glance
+                            exactly what happened with the observation.
 
     Returns
     ----------
@@ -1269,26 +1281,27 @@ def subtract_darks(light_fits, darks, bad_darks, bad_lights, set_bad_frames_to_n
     i_good = np.setxor1d(i_all, bad_lights).astype(int)  # ALL good frames, for return. 
     i_good_except_0th = np.setxor1d(i_good, [0]).astype(int)  # Used to do the dark subtraction for the 1st through nth frames.
 
-    # Do the dark subtraction: separately for frame 0 which has its own dark, then all other frames, then set bad frames to nan.
-    # Note that it's possible at this point for EITHER first_dark OR second_dark to contain NaNs. If they do,
-    # their associated light frame will be caught and set to nan in the line that sets nans below.
+    # Do the dark subtraction for the 0th light frame. If the 0th dark frame
+    # has no problems, then we subtract dark frame 0 from light frame 0 and 
+    # move on. If the 0th dark frame is unusable, we will go ahead and subtract
+    # the 1st dark frame from the 0th light frame. This is a rare occurrence.
+    # Note that it's possible at this point for EITHER first_dark OR second_dark
+    # to contain NaNs. This is handled later in this function.
     if 0 not in bad_darks:
         dark_subtracted[0, :, :] = light_data[0] - darks[0, :, :]
     else:
         dark_subtracted[0, :, :] = light_data[0] - darks[1, :, :]
 
-    # Here, we should account for the possibility that no second dark exists 
-    # (get_dark_frames() would have set it to all nan). 
-    # In that case, let's use the first dark frame for all frames.
+    # Do the dark subtraction for the 1st through nth light frame. If the 1st 
+    # dark frame is unusable, then we use the 0th dark frame instead.
+    # This is also a rare occurrence.
     if 1 in bad_darks:
         dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[0, :, :]
     else:
         dark_subtracted[i_good_except_0th, :, :] = light_data[i_good_except_0th, :, :] - darks[1, :, :]
 
-    # Set any light frames with problems to entirely nan. 
-    # This ensures we won't fit bad data for the data product pipeline. However,
-    # It's a good idea to pass in set_bad_frames_to_all_nan = False for quicklook
-    # generation so we can inspect the data.
+    # Set any light frames with problems to entirely nan, if requested. See
+    # docstring for why it may or may not be.
     if set_bad_frames_to_nan:
         dark_subtracted[bad_lights, :, :] = np.nan
 
@@ -1359,8 +1372,8 @@ def find_bad_light_frames(light_fits, bad_darks):
     light_fits : astropy.io.fits HDU instance
                  A single light observation file
     bad_darks : list
-                List of bad dark indices in ascending order, so,
-                typically one of: [0], [0, 1], [1]. 
+                List of bad dark indices in ascending order and identified
+                in find_bad_dark_frames(). Typically one of: [0], [0, 1], [1]. 
 
     Returns
     ----------
@@ -1426,8 +1439,8 @@ def find_bad_dark_frames(dark_frames, hard_failure=True):
                   Two dark frames, as returned by get_dark_frames().
     hard_failure : boolean
                    if True, will throw an exception if both darks are bad.
-                   If not, it won't. (Set to False to allow a quicklook to be 
-                   generated anyway)
+                   If not, it won't. (Set to False to allow quicklooks to be 
+                   generated in spite of errors)
 
     Returns
     ----------
@@ -1445,14 +1458,15 @@ def find_bad_dark_frames(dark_frames, hard_failure=True):
     # Loop through dark frames. Usually this will only have 2 calls
     for i in range(n_darks):
 
-        # Does the frame have nans?
+        # Check if NaNs appear in the frames, which would cause problems in 
+        # dark subtraction
         if np.isnan(dark_frames[i, :, :]).all() \
            or np.isnan(dark_frames[i, :, :]).any():
             bad_darks.append(i)
 
-        # Is the frame median stupid high?
+        # Check if the frame median is way too large 
         if (frame_medians[i] > 2*np.min(frame_medians)) \
-            or (frame_medians[i] > 2000): # fail safe - some files have a crazy dark and a nan dark.
+            or (frame_medians[i] > 2000):
             bad_darks.append(i)
 
     # Quit here if both darks are bad
@@ -1467,20 +1481,30 @@ def get_corrupt_frames(light_fits):
     Will loop across frames of a file, light_fits, and check if they are 
     corrupted by bad commanding/MUV contamination/keyhole.
     
-    Looks for a few common features of frames where the keyhole is bleeding through to determine if the frames are bad. 
-    Looks for the following criteria: 
-    0) a bright square at the top left of the detector image, by checking if its mean is > 5*median of a similar
-       patch in a region expected to be clean; 
-    1) a mean in the same region equal to at least 5*median of the whole frame, and 2*mean of the whole frame; 
-    2) mean in the first ~half of wavelength bins near the last spatial row is > 5*mean in the last ~half of wavelength bins
-       in the last spatial row;
-    3) mean in first 1/4 of wavelength bins on the slit is > 5*mean in last 1/4 of wavelength bins on the slit;
-    4) Same as item #3, but near the first spatial row on the detector image
+    Looks for a few common features of frames where the keyhole is bleeding
+    through to determine if the frames are bad, namely:
+    A) A bright square near the top left corner of the detector image (KEYHOLE)
+    B) An extended bright region with lines on the left half of the image (MUV)
+
+    To check for A) Keyhole, the code compares a square region near the top left
+    of the detector image with a patch of the same size in the upper middle of 
+    the detector, which is clear even in contaminated files. There, it looks for:
+    0) Top left corner mean > 5*median of expected clear patch;
+    1) Top left corner mean >= 5*median of the whole frame AND >= 2*mean of the whole frame.
+
+    To check for B) MUV contamination, the code does the following:
+    2) At the last spatial row, compares the left and right halves of the image; 
+       if the left mean is > 5*mean on the right, then contamination;
+    3) The same as #2, but comparing only the leftmost and rightmost quarter 
+       of the image, last spatial row; and
+    4) Same as item #3, but at the first spatial row on the detector image.
+
+    These criteria were basically determined by eye working off example files.
 
     The frame is marked as broken if
     1) all criteria are True 
-    2) Criterion 0 is True, others are all False
-    3) Criterion 0 is False (no square detected) but all others are True
+    2) Criterion 0 is True, others are all False (Keyhole but no MUV bleed)
+    3) Criterion 0 is False (no keyhole) but all others True (MUV bleed)
 
     Parameters
     ----------
