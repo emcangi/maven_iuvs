@@ -339,7 +339,12 @@ def ran_DN_uncertainty(light_fits, datacube_override=None):
         ran_DN_sq = light_fits["Primary"].data * fit_function + sigma_background**2
 
     ran_DN = np.sqrt(ran_DN_sq)
-    # Nans can occur in the dark_subtracted_and_cleaned_data term, but that's okay.
-    # They are ignored elsewhere when we add in quadrature.
+    # NaNs may appear here and cause warnings for two reasons:
+    # 1) Negative values in ran_DN_sq that arise purely due to the dark
+    # subtraction and counts in the bins - not much we can do about that; and
+    # 2) NaNs that are already present in dark_subtracted_and_cleaned_data.
+    # See the subtract_darks() docstring in echelle.py for an explanation of
+    # why. Either way, the NaNs are ignored when uncertainties are added in
+    # quadrature in add_in_quadrature() in echelle.py.
 
     return ran_DN
