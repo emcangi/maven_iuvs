@@ -3372,16 +3372,20 @@ def loglikelihood(params, wavelength_data, binedges, CLSF, data, uncertainty,
     Retrieves the model of the lineshape to fit and the associated log likelihood, 
     assuming a Gaussian distributed quantity with independent uncertainties).
     L is defined as:
-    L = -(N/2)*ln(2π) -Σ_i^N (ln(σ_i)) -Σ_i^N ((d_i - m_i)^2 / (2(σ_i)^2))
-   
-    Thus, for a Gaussian quantity, L should be maximized, as it represents
-    the maximum likelihood estimator (MLE).
+    L = -(N/2)*ln(2π) - ln(det(Σ)) - Sum[ r.T*(Σ⁻¹)*r ]
 
     Where:
-        d_i = DN counts in wavelength bin i
-        m_i = Model-produced counts in wavelength bin i
+        N = number of wavelength bins;
+        Σ = covariance matrix (outer produdct of the correlation kernel);
+        r = residuals, (d_i - m_i) / (σ_i)^2, and T is transpose;
+        d_i = DN counts in wavelength bin i;
+        m_i = Model-produced counts in wavelength bin i;
         σ_i = data uncertainty in wavelength bin i
-        N = number of wavelength bins
+
+    Here the correlation kernel, and thus covariance matrix, describes the
+    correlation and covariance between adjacant bins. This likelihood is valid 
+    for independent Gaussian variates and L is thus the maximum likelihood 
+    estimator (MLE), to be maximized to find the best fit.
 
     Parameters
     ----------
