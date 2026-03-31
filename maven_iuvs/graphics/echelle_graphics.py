@@ -453,7 +453,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
                       remove_hotpix=True)
     
     # Calculate data uncertainties
-    dn_unc = ran_DN_uncertainty(light_fits, data)
+    dn_unc = ran_DN_uncertainty(light_fits, datacube_override=data)
     # delete bad frames from the uncertainties also
     valid_dn_unc = np.delete(dn_unc, i_badlights, axis=0)
 

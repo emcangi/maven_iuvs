@@ -296,17 +296,21 @@ def DN_to_PE_conversion_factor(light_fits):
     return conv_factor
 
 
-def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
+def ran_DN_uncertainty(light_fits, datacube_override=None):
     """
-    Figure out the random uncertainty in DN. This is adapted from the IDL pipeline in file:"
-    IUVS-ITF-SW/code/level1b/iuvs_calc_unc.pro
+    Figure out the random uncertainty in DN. This is adapted from the IDL 
+    pipeline in file:  IUVS-ITF-SW/code/level1b/iuvs_calc_unc.pro
 
     Parameters
     ----------
     light_fits : astropy.io.fits instance
                  File with light observation
-    dark_subtracted_and_cleaned_data : Array
-                                       data cube from the same file
+    datacube_override : array
+                        If provided, DN uncertainty will be calculated using 
+                        this array rather than the raw data in the file. Can 
+                        be used to compute DN uncertainty on dark subtracted 
+                        and cleaned data, but with less prescriptivism about 
+                        what the array contains.
 
     Returns
     ---------
@@ -329,7 +333,10 @@ def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
     fit_function = 40 / (2**((700-volt)/50))
 
     # This is the correct shape, not sure if it's reasonable values though:
-    ran_DN_sq = dark_subtracted_and_cleaned_data * fit_function + sigma_background**2
+    if datacube_override:
+        ran_DN_sq = datacube_override * fit_function + sigma_background**2
+    else:
+        ran_DN_sq = light_fits["Primary"].data * fit_function + sigma_background**2
 
     ran_DN = np.sqrt(ran_DN_sq)
     # Nans can occur in the dark_subtracted_and_cleaned_data term, but that's okay.

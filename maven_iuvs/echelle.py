@@ -2201,10 +2201,15 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     else:
         processed_data = dark_sub_data
 
-    # Flatten the calibrated data (coadd in spatial dimension)
-    # ===============================================================================================
+    # Uncertainty on the data 
+    # =========================================================================
+    ran_DN = ran_DN_uncertainty(light_fits, datacube_override=processed_data)
 
-    spectrum, data_unc = flatten(light_fits, processed_data)
+    # Flatten the calibrated data (coadd in spatial dimension)
+    # =========================================================================
+    spectrum = get_spectrum(processed_data, light_fits, coadded=False, integration=None)  
+    data_unc = add_in_quadrature(ran_DN, light_fits, coadded=False, integration=None) 
+
     # For some reason, data uncertainties are still nonzero even if the frame
     # is broken, so turn them off here so they don't plot..
     for fi in i_badlights: 
@@ -3608,31 +3613,6 @@ def load_lsf(calibration="v15"):
 
 
 # Functions that help flatten arrays ==========================================
-
-def flatten(light_fits, processed_data):
-    """
-    Parameters
-    ----------
-    light_fits : astropy.io.fits instance
-                File with light observation
-    processed_data : array
-                   cleaned up data cube, format (n_integrations) x (n_spa) x (n_spe)
-    
-    Returns
-    ----------
-    spec, unc : arrays
-                dimenion (n_int) x (n_spe), the spectrum and associated data uncertainties 
-                coadded across the spatial dimension.
-    """
-    # Uncertainty on the data 
-    # ============================================================================================
-    ran_DN = ran_DN_uncertainty(light_fits, processed_data)
-    
-    # WARNING: refactored get_spectrum. 
-    spec = get_spectrum(processed_data, light_fits, coadded=False, integration=None)  
-    unc = add_in_quadrature(ran_DN, light_fits, coadded=False, integration=None) 
-
-    return spec, unc
 
 
 def get_wavelengths(light_fits):
