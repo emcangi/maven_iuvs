@@ -4372,7 +4372,7 @@ def remove_cosmic_rays(data, Ns=2, std_or_mad="mad"):
         sigma = np.std(data, axis=0, ddof=1) # ddof = 1 is required to match the result of this calculation from IDL. 
                                              # This sets the normalization constant of the variance to 1/(N-1)
     else:
-        sigma = sp.stats.median_abs_deviation(data, axis=0)
+        sigma = 1.4826 * sp.stats.median_abs_deviation(data, axis=0)
     
     no_rays = copy.deepcopy(data)
 
