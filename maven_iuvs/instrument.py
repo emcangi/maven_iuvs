@@ -333,7 +333,7 @@ def ran_DN_uncertainty(light_fits, datacube_override=None):
     fit_function = 40 / (2**((700-volt)/50))
 
     # This is the correct shape, not sure if it's reasonable values though:
-    if datacube_override:
+    if datacube_override is not None:
         ran_DN_sq = datacube_override * fit_function + sigma_background**2
     else:
         ran_DN_sq = light_fits["Primary"].data * fit_function + sigma_background**2
