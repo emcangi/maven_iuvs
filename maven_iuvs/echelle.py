@@ -452,7 +452,7 @@ def get_dark_from_keyfile(light_filename, keydf):
     dark_filename : string
          Filename for the matched dark.
     """
-    
+  
     if type(keydf)==str:
         keydf = pd.read_csv(keydf)
 
@@ -2216,7 +2216,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         data_unc[fi, :] = 0
 
     # An alternate fit using a BU-style background
-    # ===============================================================================================   
+    # =========================================================================
 
     if do_BU_background_comparison:
         # TODO: This can be updated to not use the hand-coded df.
@@ -2240,7 +2240,7 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         packed_vals = [*arrays_in_kR_pernm_BUbg, fit_params_BUbg_kR, fit_uncertainties_BUbg_kR]
 
     # Standard fitting, with or without returning the individual fits for each line.
-    # ===============================================================================================
+    # ==========================================================================
     if use_BU_bg:
         binning_df = get_binning_df(calibration=calibration)
         binning_info_dict = binning_df.loc[(binning_df['Nspa'] == get_binning_scheme(light_fits)["nspa"]) & (binning_df['Nspe'] == get_binning_scheme(light_fits)["nspe"])]
@@ -2763,7 +2763,7 @@ def fit_H_and_D(pig, wavelengths, spec, light_fits, CLSF, unc,
         modeled_params = [np.nan for p in range(len(pig)+1)]
         fit_uncert = [np.nan for p in range(len(pig))]
         return modeled_params, I_bin, fit_uncert, H_bin, D_bin, IPH_bin
-
+  
     # Get bin edges in nm.
     edges = get_bin_edges(light_fits)
 
@@ -4015,7 +4015,7 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
     brightness_and_linectr_df.to_csv(brightness_and_linectr_csv_path, index=False, na_rep=narep)
     bright_data_ph_per_s_df.to_csv(ph_per_s_csv_path, index=False, na_rep=narep)
     fits_n_spec_df.to_csv(all_fits_csv_path, index=False, na_rep=narep)
-    
+
     # Now either call IDL or write to the command queue
     # =========================================================================
     # Following block used when multiprocessing is not being run
@@ -4158,7 +4158,6 @@ def command_IDL_and_verify_done(q, proc, command_to_stdin, success_message,
         raise TimeoutError(f"Expected message {success_message} not seen within {timeout}s")
 
     # Token found – we can stop the watcher cleanly
-    print("Script compiled OK")
     stop_watcher_evt.set()
     watch_for_msg.join(timeout=1)
 
