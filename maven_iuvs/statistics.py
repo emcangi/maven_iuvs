@@ -4,7 +4,9 @@ import math
 
 def chisquared(LL, N, logdetcov, p=0, reduced=False):
     """
-    Computes chisquared given some log likelihood.
+    Computes chisquared given some log likelihood and ln(det(covariance)), that
+    is, it assumes non-independent (correlated) Gaussian variates.
+
     Parameters
     ----------
         LL : int or float
