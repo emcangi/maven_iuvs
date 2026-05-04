@@ -3177,35 +3177,50 @@ def get_kernel_array(n_wave_bins=332):
         raise ValueError("Warning! We need to construct a kernel for other " \
                          f"binning. This file has n_wave_bins={n_wave_bins}.")
     # Correlation kernel - made by Mike
-    kernel = np.array([1.00000000e+00, 3.81597163e-01, 2.02042575e-01, 1.31219735e-01,
-                    8.65372128e-02, 6.51347338e-02, 5.72377976e-02, 4.94840769e-02,
-                    4.75094664e-02, 4.24771659e-02, 4.13186867e-02, 3.71474974e-02,
-                    3.70467190e-02, 3.35355504e-02, 3.36457871e-02, 3.03350132e-02,
-                    3.02464225e-02, 2.71446379e-02, 2.69564532e-02, 2.39475146e-02,
-                    2.43829937e-02, 2.11826523e-02, 2.13704591e-02, 1.89614960e-02,
-                    1.93592340e-02, 1.61692421e-02, 1.60018720e-02, 1.33394775e-02,
-                    1.35330879e-02, 1.07173005e-02, 1.08148758e-02, 7.94474446e-03,
-                    7.94698678e-03, 5.07449876e-03, 5.54789292e-03, 3.12420152e-03,
-                    3.47598772e-03, 1.60254087e-04, 4.80756100e-04, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0]) 
+    mirrored_kernel = np.array([0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                4.80756100e-04, 1.60254087e-04, 3.47598772e-03, 3.12420152e-03,
+                                5.54789292e-03, 5.07449876e-03, 7.94698678e-03, 7.94474446e-03,
+                                1.08148758e-02, 1.07173005e-02, 1.35330879e-02, 1.33394775e-02,
+                                1.60018720e-02, 1.61692421e-02, 1.93592340e-02, 1.89614960e-02,
+                                2.13704591e-02, 2.11826523e-02, 2.43829937e-02, 2.39475146e-02,
+                                2.69564532e-02, 2.71446379e-02, 3.02464225e-02, 3.03350132e-02,
+                                3.36457871e-02, 3.35355504e-02, 3.70467190e-02, 3.71474974e-02,
+                                4.13186867e-02, 4.24771659e-02, 4.75094664e-02, 4.94840769e-02,
+                                5.72377976e-02, 6.51347338e-02, 8.65372128e-02, 1.31219735e-01,
+                                2.02042575e-01, 3.81597163e-01, 1.00000000e+00, 3.81597163e-01,
+                                2.02042575e-01, 1.31219735e-01, 8.65372128e-02, 6.51347338e-02,
+                                5.72377976e-02, 4.94840769e-02, 4.75094664e-02, 4.24771659e-02,
+                                4.13186867e-02, 3.71474974e-02, 3.70467190e-02, 3.35355504e-02,
+                                3.36457871e-02, 3.03350132e-02, 3.02464225e-02, 2.71446379e-02,
+                                2.69564532e-02, 2.39475146e-02, 2.43829937e-02, 2.11826523e-02,
+                                2.13704591e-02, 1.89614960e-02, 1.93592340e-02, 1.61692421e-02,
+                                1.60018720e-02, 1.33394775e-02, 1.35330879e-02, 1.07173005e-02,
+                                1.08148758e-02, 7.94474446e-03, 7.94698678e-03, 5.07449876e-03,
+                                5.54789292e-03, 3.12420152e-03, 3.47598772e-03, 1.60254087e-04,
+                                4.80756100e-04, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                0.00000000e+00])
+    
+    k_halfwidth = len(mirrored_kernel) // 2
 
-    # Fill 0's for remaining elements up to n_wave_bins. 
-    padded_kernel = np.pad(kernel, (0, n_wave_bins-len(kernel)))
+    # Fill 0's for remaining elements up to n_wave_bins.
+    padded_kernel = np.pad(mirrored_kernel, (0, n_wave_bins-len(mirrored_kernel)))
     kernel_array = np.zeros((n_wave_bins, n_wave_bins))
     
-    for i in range(len(padded_kernel)):
-        # Fill each column of array with the full kernel vector, shifted by i
-        # places toward the "right" (or end).
-        kernel_array[:, i] = np.roll(padded_kernel, i)
+    for i in range(n_wave_bins):
+        # Fill each column with 0-padded mirrored_kernel, shifting by i-k_halfwidth
+        # places each time. This sets 1s on the diagonal. Extra values appear
+        # in bottom left and top right corners, which we later erase.
+        kernel_array[:, i] = np.roll(padded_kernel, i-k_halfwidth)
 
-        # Mirror values above diagonal
-        if i <= len(kernel)-1:
-            mirrored_partial_kernel = np.flip(kernel[1:1+i])
-            kernel_array[:i, i] = mirrored_partial_kernel
-        if i >= len(kernel):
-            # After a certain point we have to add more zeros
-            mirrored_kernel_padded = np.flip(np.pad(kernel[1:], (0, i-len(kernel[1:]))))
-            kernel_array[:i, i] = mirrored_kernel_padded
+    # Erase bottom left
+    kernel_array[-k_halfwidth:, :k_halfwidth] = 0
+
+    # Erase bottom right
+    kernel_array[:k_halfwidth, -k_halfwidth:] = 0
 
     return kernel_array
     
