@@ -393,7 +393,7 @@ def main():
             lock = manager.Lock()
 
             # PROCESS *ALL* THE FILES!!!!!
-            with ctx.Pool(processes=os.process_cpu_count()) as pool:
+            with ctx.Pool(processes=os.process_cpu_count(), maxtasksperchild=1) as pool:
                 # Map iterable tasks to the workers; starmap is used because 
                 # multiple arguments to obs_worker are required.
                 pool.starmap(obs_worker, 
