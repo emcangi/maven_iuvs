@@ -13,3 +13,4 @@ IPH_maxw = 0.00727  # Max width of IPH in nm, computed from Doppler equation,
                      # with Δv = sqrt(2kT/m), where m is for H, and T is the 
                      # maximum temperature (~19500 K) from Quemerais 2006, 
                      # Figure 5. 
+Lya_lab = 121.5671

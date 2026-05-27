@@ -51,7 +51,16 @@ detector."""
 
 ech_Lya_slit_start = 346  # Starting pixel of slit in echelle mode for H/D Ly alpha
 
+ech_best_H_pixel = 478 
+"""Best matching pixel in the spectral direction for the line center."""
+
+ech_best_MRH_pixel = 485 
+"""The location of the row most-accurately representing the MRH altitudes 
+across the aperture center (to be used by all emissions)"""
+
 ech_Lya_slit_end = 535  # Ending pixel of slit in echelle mode for H/D Ly alpha
+
+ech_dH1215   = 0.00710    # resolution in Angstrom/pixel of binned spectral axis for LyA region
 
 ech_LSF_unit = 0.35540982 # LSF units: kR / ph / s
 
@@ -287,17 +296,21 @@ def DN_to_PE_conversion_factor(light_fits):
     return conv_factor
 
 
-def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
+def ran_DN_uncertainty(light_fits, datacube_override=None):
     """
-    Figure out the random uncertainty in DN. This is adapted from the IDL pipeline in file:"
-    IUVS-ITF-SW/code/level1b/iuvs_calc_unc.pro
+    Figure out the random uncertainty in DN. This is adapted from the IDL 
+    pipeline in file:  IUVS-ITF-SW/code/level1b/iuvs_calc_unc.pro
 
     Parameters
     ----------
     light_fits : astropy.io.fits instance
                  File with light observation
-    dark_subtracted_and_cleaned_data : Array
-                                       data cube from the same file
+    datacube_override : array
+                        If provided, DN uncertainty will be calculated using 
+                        this array rather than the raw data in the file. Can 
+                        be used to compute DN uncertainty on dark subtracted 
+                        and cleaned data, but with less prescriptivism about 
+                        what the array contains.
 
     Returns
     ---------
@@ -311,7 +324,7 @@ def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
     # This is spe_size * spa_size, pixels per bin in spatial x spectral space.
 
     if ~(np.diff(npix_eachbin) == 0).all():
-        raise ValueError("Some problem with the binning scheme. Unhandled nonlinearly binned file?")
+        raise ValueError("Some unhandled problem with the binning scheme?")
 
     npix_perbin = npix_eachbin[0, 0]  # Assuming everything is k, we can do this
 
@@ -320,10 +333,18 @@ def ran_DN_uncertainty(light_fits, dark_subtracted_and_cleaned_data):
     fit_function = 40 / (2**((700-volt)/50))
 
     # This is the correct shape, not sure if it's reasonable values though:
-    ran_DN_sq = dark_subtracted_and_cleaned_data * fit_function + sigma_background**2
-    # if np.any(ran_DN_sq < 0.):
-    #     raise ValueError("negative values in ran_DN_sq")
-    ran_DN = np.sqrt(ran_DN_sq)  # TODO: check if it's okay to do this on the cleaned data. Probably not
-    ran_DN[np.where(np.isnan(ran_DN))] = 0  # TODO: this is not acceptable lol
+    if datacube_override is not None:
+        ran_DN_sq = datacube_override * fit_function + sigma_background**2
+    else:
+        ran_DN_sq = light_fits["Primary"].data * fit_function + sigma_background**2
+
+    ran_DN = np.sqrt(ran_DN_sq)
+    # NaNs may appear here and cause warnings for two reasons:
+    # 1) Negative values in ran_DN_sq that arise purely due to the dark
+    # subtraction and counts in the bins - not much we can do about that; and
+    # 2) NaNs that are already present in dark_subtracted_and_cleaned_data.
+    # See the subtract_darks() docstring in echelle.py for an explanation of
+    # why. Either way, the NaNs are ignored when uncertainties are added in
+    # quadrature in add_in_quadrature() in echelle.py.
 
     return ran_DN

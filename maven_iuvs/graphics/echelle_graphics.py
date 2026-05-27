@@ -1,35 +1,33 @@
 import datetime
+import math 
+import re
+import gc
+import os
+from pathlib import Path
 import numpy as np
 from astropy.io import fits
-import os 
-import copy
 import matplotlib as mpl
 import matplotlib.gridspec as gs
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
-import math 
-import re
-import gc
 from tqdm.auto import tqdm
-from pathlib import Path
-from maven_iuvs.binning import get_bin_pix_boundaries, get_bin_edges, get_img_dimensions, get_binning_scheme
+from maven_iuvs.binning import get_img_dimensions
 from maven_iuvs.constants import D_offset
-from maven_iuvs.instrument import ech_Lya_slit_start, ech_Lya_slit_end, convert_spectrum_DN_to_photoevents
+from maven_iuvs.instrument import ech_Lya_slit_start, ech_Lya_slit_end
 from maven_iuvs.echelle import make_dark_index, downselect_data, add_in_quadrature, background, \
-    pair_lights_and_darks, coadd_lights, find_files_missing_geometry, get_dark_frames, \
-    subtract_darks, remove_cosmic_rays, remove_hot_pixels, fit_H_and_D, line_fit_initial_guess, \
-    get_wavelengths, get_spectrum, load_lsf, CLSF_from_LSF, ran_DN_uncertainty, get_conversion_factors, \
+    coadd_lights, find_files_missing_geometry, get_dark_frames, \
+    subtract_darks, clean_data, fit_H_and_D, line_fit_initial_guess, \
+    get_wavelengths, get_spectrum, load_lsf, CLSF_from_LSF, ran_DN_uncertainty, \
     get_ech_slit_indices, make_fit_param_dict, check_whether_IPH_fittable, \
-    convert_to_physical_units
+    convert_to_physical_units, find_bad_dark_frames, find_bad_light_frames, \
+    get_dark_from_keyfile, get_kernel_array
 from maven_iuvs.geometry import get_mean_mrh
 from maven_iuvs.graphics import color_dict, make_sza_plot, \
      make_tangent_lat_lon_plot, make_alt_plot
 from maven_iuvs.graphics.line_fit_plot import detector_image
 from maven_iuvs.miscellaneous import iuvs_orbno_from_fname, \
     iuvs_segment_from_fname, get_n_int, iuvs_filename_to_datetime, orbno_RE, fn_noext_RE, fn_RE
-from maven_iuvs.search import find_files 
 from maven_iuvs.time import utc_to_sol
-from maven_iuvs.user_paths import l1a_dir
 
 # COMMON COLORS ==========================================================================================
 model_color = "#1b9e77"
@@ -37,10 +35,11 @@ data_color = "#d95f02"
 bg_color = "xkcd:cerulean"
 guideline_color = "xkcd:cool gray"
 
+
 # QUICKLOOK CODE =========================================================================================
 
-
-def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segment=None, start_k=0, savefolder=None, **kwargs):
+def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, verbose=False,
+                   segment=None, savefolder=None, keyfile_folder="/", **kwargs):
     """
     Runs quicklooks for the files in ech_l1a_idx, downselected by either date, orbit, or segment.
 
@@ -66,9 +65,17 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
     Saved quicklooks
     """
 
+    if v=="v13":
+        light_dark_keyfile = keyfile_folder + "MASTER_LIGHT_DARK_KEY_v13.csv"
+    else:
+        light_dark_keyfile = keyfile_folder + "MASTER_LIGHT_DARK_KEY_v14.csv"
+
     dark_idx = make_dark_index(ech_l1a_idx)
     if selected_l1a is None:
-        selected_l1a = downselect_data(ech_l1a_idx, date=date, orbit=orbit, segment=segment)
+        selected_l1a = downselect_data(ech_l1a_idx, light_dark="light", date=date, orbit=orbit, segment=segment)
+
+    # Now remove any darks
+    selected_l1a = downselect_data(selected_l1a, light_dark="light")
 
     # Make the quicklook folder if it's not there
     if savefolder is not None:
@@ -82,56 +89,75 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
     # Files without geometry - list of file names
     no_geometry = [i['name'] for i in find_files_missing_geometry(selected_l1a)]
 
-    # TODO: fix bug if "verbose" flag is missing from call
-    lights_and_darks, files_missing_dark = pair_lights_and_darks(selected_l1a, dark_idx, verbose=kwargs["verbose"])
-
     # Arrays to keep track of which files were processed, which were already done, and which had problems
     processed = []
     badfiles = []
     nonlinearfiles = []
     already_done = []
     unique_exceptions = []
+    files_missing_dark = []
 
     # Loop through the dictionary containing light and dark pairs and run the quicklook code on each set.
-    ldkeys = list(lights_and_darks) 
-    for ki in tqdm(range(start_k, len(ldkeys))):
-        k = ldkeys[ki]
-        light_idx = lights_and_darks[k][0]
+    lights_not_in_key = []
 
-        # open the light file --------------------------------------------------------------------
-        light_path = find_files(data_directory=l1a_dir,
-                                use_index=False, pattern=light_idx['name'])[0]
+    for light_md in tqdm(selected_l1a):
+        # Get paths for light and dark
+        lfold, lfile, dfold, dfile = get_dark_from_keyfile(light_md['name'], 
+                                                           light_dark_keyfile)
+        if lfold==lfile==dfold==dfile=="Light missing":
+            lights_not_in_key.append(light_md['name'])
+            continue
 
-        # open the dark file ---------------------------------------------------------------------
-        dark_path = find_files(data_directory=l1a_dir,
-                               use_index=False, pattern=lights_and_darks[k][1]["name"])[0]
+        light_path = lfold + lfile
+        if dfile == "No valid dark found":
+            dark_path = dfile
+            dark_md = {} #  make a dummy dict for a scenario with no valid dark
+        else:
+            dark_path = dfold + dfile
+            # Select the dark metadata entry
+            try:
+                dark_md = [i for i in dark_idx if i['name'] == dfile][0]
+            except IndexError:
+                raise IndexError("Unhandled exception: Couldn't find a dark for {lfile}")
+
 
         quicklook_status = ""
         try:
-            quicklook_status = make_one_quicklook(lights_and_darks[k], light_path, dark_path, no_geo=no_geometry, savefolder=savefolder, **kwargs) 
+            quicklook_status = make_one_quicklook(light_md, light_path, 
+                                                  dark_md, dark_path, 
+                                                  no_geo=no_geometry,
+                                                  savefolder=savefolder, 
+                                                  **kwargs) 
         except Exception as e:  # Handle uncaught exceptions
             quicklook_status = e.args[0] #  Collect the actual message
-            if kwargs["verbose"] is True:
+            if verbose is True:
                 raise(e)
-        finally:
+        finally:    
+            # Now keep track of what happened
             if quicklook_status == "File exists":
-                already_done.append(light_idx['name'])
+                already_done.append(light_md['name'])
             elif (quicklook_status=="Missing critical observation data: no valid lights"):
-                badfiles.append(light_idx['name'])
+                badfiles.append(light_md['name'])
+            elif (quicklook_status=="No dark observation found"):
+                badfiles.append(light_md['name'])
             elif (quicklook_status=="Missing critical observation data: no valid darks"): 
                 # This is different from files missing dark. Here, a dark file was found, but the frames are all bad.
-                badfiles.append(light_idx['name'])
+                files_missing_dark.append(light_md['name'])
             elif (quicklook_status=="Keyword \'SPE_SIZE\' not found."):
-                nonlinearfiles.append(light_idx['name'])
+                nonlinearfiles.append(light_md['name'])
             elif (quicklook_status == "Success"):
-                processed.append(light_idx['name'])
+                processed.append(light_md['name'])
             else:
-                unique_exceptions.append(f"{light_idx['name']} - Exception: {quicklook_status}")
+                unique_exceptions.append(f"{light_md['name']} - Exception: {quicklook_status}")
                 print("Got an unhandled exception, but it should be logged.")
-        ki += 1
 
     if savefolder is not None:
         logfile_name = f"log{selected_l1a[0]['orbit']}-{selected_l1a[-1]['orbit']}_processed_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        missing_lights_log = "missing_lights_log.log"
+
+        if lights_not_in_key:
+            mll = open(savefolder+missing_lights_log, "w")
+
         with open(f"{savefolder}{logfile_name}", "w") as logfile:
             logfile.write(f"Finished. Ran orbits {selected_l1a[0]['orbit']}--{selected_l1a[-1]['orbit']}\n\n")
             
@@ -176,6 +202,17 @@ def run_quicklooks(ech_l1a_idx, selected_l1a=None, date=None, orbit=None, segmen
                 for e in unique_exceptions:
                     logfile.write(f"\t{e}\n")
                 logfile.write("\n") # newline
+
+            if lights_not_in_key:
+                print("ALERT: Found lights missing from the keyfile")
+                logfile.write(f"\n{len(lights_not_in_key)} files aren't in the dark key: \n")
+                for m in lights_not_in_key:
+                    logfile.write(f"\t{m}\n")
+                    mll.write(f"\t{m}\n")
+                logfile.write("\n") # newline
+                mll.write("\n") # newline
+
+                mll.close()
 
             logfile.write(f"Total files: {len(processed) + len(badfiles) + len(already_done) + len(files_missing_dark) + len(nonlinearfiles) + len(unique_exceptions)}\n")
 
@@ -291,19 +328,23 @@ def quicklook_figure_skeleton(N_thumbs, figsz=(44, 24), thumb_cols=10, aspect=1)
     return fig, [SpectrumAx, MainAx], R1Axes, R2Axes, ThumbAxes 
 
 
-def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show=True, savefolder=None, 
-                       figsz=(42, 26), fs="large", useframe="coadded", cmap=None,
-                       arange=None, prange=None, special_prange=[0, 65], show_DN_histogram=False, verbose=False, img_dpi=96, overwrite=False, overwrite_prior_to=datetime.datetime.now()):
+def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None, 
+                       show=True, savefolder=None, figsz=(42, 26), fs="large", 
+                       useframe="coadded", cmap=None, calibration="v15",
+                       arange=None, prange=None, special_prange=[0, 65], 
+                       show_DN_histogram=False, img_dpi=96, 
+                       overwrite=False, overwrite_prior_to=datetime.datetime.now()):
     """ 
     Fills in the quicklook figure for a single observation.
     
     Parameters
     ----------
-    index_data_pair : List of dictionaries
-                      Of the form [light_metadata, dark_metadata], where each entry
-                      contain the metadata of a single observation. Light first, then dark.
+    light_md : Dictionary
+               Metadata of the light observation
     light_path : string
                  Path to light file
+    dark_md : Dictionary
+              Metadata of the light observation
     dark_path : string
                  Path to light file
     no_geo : list
@@ -331,8 +372,6 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
                         Can be turned on to show a histogram of all the pixel counts.
                         Useful for determining where to set prange, but since prange is ideally passed in,
                         this means you will want to run this iteratively/manually.
-    verbose : boolean
-              whether to print feedback messages
     img_dpi : int
               DPI for saved image, keep at 96 for a reasonable image size.
     overwrite : boolean
@@ -350,6 +389,10 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
           May also return an unhandled exception to allow for flexible error catching.
           If the status is "Success", the completed figure is also saved to savefolder.
     """
+
+    # If no dark, return immediately.
+    if "No valid dark found" in dark_path:
+        return "No dark observation found"
     
     # Adjust font face
     mpl.rcParams["font.sans-serif"] = "Louis George Cafe"
@@ -380,24 +423,39 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     light_fits = fits.open(light_path)
     dark_fits = fits.open(dark_path)
 
-    # PROCESS THE DATA =================================================================================
+    # PROCESS THE DATA =========================================================
     # Find number of light integrations
     n_ints = get_n_int(light_fits)
     n_ints_dark = get_n_int(dark_fits)
+ 
+    # Identify bad frames 
+    # -------------------------------------------------------------------------
+    # Retrieve dark frame, ensuring 2 total frames. 
+    darks = get_dark_frames(dark_fits)
+
+    # Find bad darks
+    # -------------------------------------------------------------------------
+    bad_darks = find_bad_dark_frames(darks, hard_failure=False)
+
+    # Get bad lights
+    # -------------------------------------------------------------------------
+    i_badlights, bad_light_types = find_bad_light_frames(light_fits, bad_darks)
+
+    # Also the good lights
+    n_good_frames = n_ints - len(i_badlights)
 
     # Dark subtraction
-    dark_subtracted, n_good_frames, bad_inds =  subtract_darks(light_fits, dark_fits)
-    nan_light_inds, bad_light_inds, light_frames_with_nan_dark, nan_dark_inds = bad_inds  # unpack indices of problematic frames
-    all_bad_lights = list(set(nan_light_inds + bad_light_inds + light_frames_with_nan_dark))
-    
+    # =========================================================================
+    dark_subtracted = subtract_darks(light_fits, darks, bad_darks, i_badlights,
+                                     set_bad_frames_to_nan=False)
     # Clean up the data
-    data = remove_cosmic_rays(dark_subtracted, std_or_mad="mad")
-    data = remove_hot_pixels(data, all_bad_lights)
+    data = clean_data(dark_subtracted, i_badlights, remove_rays=True, 
+                      remove_hotpix=True)
     
     # Calculate data uncertainties
-    dn_unc = ran_DN_uncertainty(light_fits, data)
+    dn_unc = ran_DN_uncertainty(light_fits, datacube_override=data)
     # delete bad frames from the uncertainties also
-    valid_dn_unc = np.delete(dn_unc, all_bad_lights, axis=0)
+    valid_dn_unc = np.delete(dn_unc, i_badlights, axis=0)
 
     # determine plottable image
     coadded_lights = coadd_lights(data, n_good_frames)
@@ -408,59 +466,73 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     coadded_unc = np.sqrt( np.nansum( valid_dn_unc**2, axis=0) ) / n_good_frames
     coadded_unc_spec = add_in_quadrature(coadded_unc, light_fits, coadded=True)  # added over spatial for a spectrum uncertainty
 
-    # Do a fit to the coadded image -------------------------------------------------------------------
-
+    # Set up the coadded spectrum - even for files with no fittable frames
     wl = get_wavelengths(light_fits) 
     coadded_spec = get_spectrum(coadded_lights, light_fits, coadded=True)
+    
+    # Do a fit to the coadded image -------------------------------------------------------------------
+    # Check that there is at least 1 usable frame 
+    if n_good_frames-np.count_nonzero(bad_light_types["corrupt"]) > 0:
+        initial_guess = line_fit_initial_guess(light_fits, wl, 
+                                            # Following line is necessary to 
+                                            # work correctly with new version of
+                                            # line_fit_initial_guess, which 
+                                            # typically makes initial guess for 
+                                            # whole obs file at once. 
+                                            np.atleast_2d(coadded_spec), 
+                                            coadded=True)
+        # Now must transform it back to a 1D vector rather than a 2D array.
+        initial_guess = np.ndarray.flatten(initial_guess)
+        lsfx_nm, lsf_f = load_lsf(calibration=calibration)
+        theCLSF = CLSF_from_LSF(lsfx_nm, lsf_f)
+        mean_mrh = get_mean_mrh(light_fits)
+        fit_IPH_component = [check_whether_IPH_fittable(mean_mrh, i) for i in range(n_ints)]
+        fit_IPH = True if any(fit_IPH_component) else False
 
-    initial_guess = line_fit_initial_guess(light_fits, wl, 
-                                           # Following line is necessary to 
-                                           # work correctly with new version of
-                                           # line_fit_initial_guess, which 
-                                           # typically makes initial guess for 
-                                           # whole obs file at once. 
-                                           np.atleast_2d(coadded_spec), 
-                                           coadded=True)
-    # Now must transform it back to a 1D vector rather than a 2D array.
-    initial_guess = np.ndarray.flatten(initial_guess)
-    lsfx_nm, lsf_f = load_lsf(calibration="new")
-    theCLSF = CLSF_from_LSF(lsfx_nm, lsf_f)
-    mean_mrh = get_mean_mrh(light_fits)
-    fit_IPH_component = [check_whether_IPH_fittable(mean_mrh, i) for i in range(n_ints)]
-    fit_IPH = True if any(fit_IPH_component) else False
+        # Get the correlation kernel and covariance matrix 
+        corr_kernel = get_kernel_array(n_wave_bins=len(wl))
+        covmat = corr_kernel * np.outer(coadded_unc_spec, coadded_unc_spec)
+        logdet_covmat = np.linalg.slogdet(covmat).logabsdet
+        covmat_inv = np.linalg.inv(covmat)
 
-    # This keeps track of whether fitting H and D succeeded - not whether the whole quicklook process succeeds
-    fit_succeeded = True
-    try:
-        fit_params, I_fit, fit_1sigma, *_ = fit_H_and_D(initial_guess, wl,
-                                                        coadded_spec,
-                                                        light_fits, theCLSF,
-                                                        fit_IPH_component=fit_IPH,
-                                                        unc=coadded_unc_spec, solver="Powell", fitter="dynesty", hush_warning=True)
-        fit_params_dict = make_fit_param_dict(fit_params[:-1])
-        fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
+        # This keeps track of whether fitting H and D succeeded - not whether the whole quicklook process succeeds
+        fit_succeeded = True
+        try:
+            fit_params, I_fit, fit_1sigma, *_ = fit_H_and_D(initial_guess, wl,
+                                                            coadded_spec,
+                                                            light_fits, theCLSF,
+                                                            coadded_unc_spec,
+                                                            covmat_inv,
+                                                            logdet_covmat,
+                                                            fit_IPH_component=fit_IPH,
+                                                            solver="Powell", 
+                                                            fitter="dynesty", 
+                                                            hush_warning=True)
+            fit_params_dict = make_fit_param_dict(fit_params[:-1])
+            fit_unc_dict = make_fit_param_dict(fit_1sigma, is_fitparams=False)
 
-        bg_fit = background(wl, fit_params_dict['central_wavelength_H'], fit_params_dict['background_b'], fit_params_dict['background_m'], fit_params_dict['background_m2'])  # , fit_params_dict['background_m3'])
-         # You would think we need to adjust Aeff in the conversions but we don't because we're basically using an average
+            bg_fit = background(wl, fit_params_dict['central_wavelength_H'], fit_params_dict['background_b'], fit_params_dict['background_m'], fit_params_dict['background_m2'])  # , fit_params_dict['background_m3'])
+            # You would think we need to adjust Aeff in the conversions but we don't because we're basically using an average
 
-        arrays_in_DN = [coadded_spec, coadded_unc_spec, I_fit, bg_fit]
-        arrays_in_kR_pernm, fit_params_kR, fit_unc_kR  = convert_to_physical_units(light_fits, arrays_in_DN, [fit_params_dict], [fit_unc_dict])
-        spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bg_array_kR_pernm = arrays_in_kR_pernm
-    except Exception as e:
-        print(f"Couldn't fit: {e}")
-        fit_succeeded = False
+            arrays_in_DN = [coadded_spec, coadded_unc_spec, I_fit, bg_fit]
+            arrays_in_kR_pernm, fit_params_kR, fit_unc_kR  = convert_to_physical_units(light_fits, arrays_in_DN, [fit_params_dict], [fit_unc_dict], [0])
+            spec_kR_pernm, data_unc_kR_pernm, I_fit_kR_pernm, bg_array_kR_pernm = arrays_in_kR_pernm
+        except Exception as e:
+            print(f"Couldn't fit: {e}")
+            fit_succeeded = False
+    else:
+        print("No usable frames")
+        fit_succeeded = False 
 
     # DARK PROCESSING ===================================================================================
-    # Retrieve the dark frames here also for plotting purposes 
-    darks = get_dark_frames(dark_fits)
-    first_dark = darks[0, :, :]
-    second_dark = darks[1, :, :]
 
+    good_darks = list({0,1}.difference(set(bad_darks)))
     # Get an average dark - it's okay if ONE dark is nan.
-    avg_dark = get_dark_frames(dark_fits, average=True)
+    avg_dark = np.nanmean(darks[good_darks, :, :], axis=0)
 
     # get all the data values so we can make one common colorbar
-    all_data = np.concatenate((detector_image_to_plot, first_dark, second_dark, avg_dark), axis=None) 
+    all_data = np.concatenate((detector_image_to_plot, darks[0, :, :], 
+                               darks[1, :, :], avg_dark), axis=None)
 
     # PLOT SETUP =======================================================================================
 
@@ -472,9 +544,9 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     prange_full = [0, 100]
     if prange is None:
         prange = prange_full
-    for p in range(len(prange)):
-        if prange[p] is None:
-            prange[p] = prange_full[p]
+    for i,p in enumerate(prange):
+        if p is None:
+            prange[i] = prange_full[i]
 
     # Up prange for IPH observations
     if segment == "outspace":
@@ -486,9 +558,9 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     # Then, if an absolute value has not been set, the code sets the value based on the percentile value.
     if arange is None:
         arange = [None, None]
-    for a in range(len(arange)):
-        if arange[a] is None:
-            arange[a] = np.nanpercentile(all_data, prange[a])
+    for i, a in enumerate(arange):
+        if a is None:
+            arange[i] = np.nanpercentile(all_data, prange[i])
 
     if show_DN_histogram:
         pctles = [50, 75, 99, 99.9]
@@ -566,9 +638,6 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
             DetAxes[0].text(textLA, 0.4, "IPH not observable with this " \
                             "viewing geometry", transform=DetAxes[0].transAxes, 
                             fontsize=16+fontsizes[fs])
-            
-        DetAxes[0].text(textLA, 0.35, "WARNING: Coadded brightnesses should only be used to estimate an emission's presence.\nUncertainty may be unreliable or nan.",
-                        color="#777", va="top", transform=DetAxes[0].transAxes, fontsize=16+fontsizes['large'])
     else:
         DetAxes[0].text(textLA, 1, "Model fit to data failed, no fit reported", 
                         color="#777", va="top", transform=DetAxes[0].transAxes, fontsize=16+fontsizes[fs])
@@ -608,20 +677,20 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
                                                # but keep the original vertical position and height
 
     # Plot the dark frames ----------------------------------------------------------------------------------
-    detector_image(dark_fits, first_dark, fig=QLfig, ax=DarkAxes[0], scale="sqrt",
+    detector_image(dark_fits, darks[0, :, :], fig=QLfig, ax=DarkAxes[0], scale="sqrt",
                    arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
     DarkAxes[0].set_title("First dark", fontsize=16+fontsizes[fs])
     DarkAxes[1].set_title("Second dark", fontsize=16+fontsizes[fs])
     DarkAxes[2].set_title("Average dark", fontsize=16+fontsizes[fs])
 
     if n_ints_dark >= 2:
-        detector_image(dark_fits, second_dark, fig=QLfig, ax=DarkAxes[1], scale="sqrt",
+        detector_image(dark_fits, darks[1, :, :], fig=QLfig, ax=DarkAxes[1], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
         detector_image(dark_fits, avg_dark, fig=QLfig, ax=DarkAxes[2], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
 
     elif n_ints_dark==1:
-        template = np.empty_like(second_dark)
+        template = np.empty_like(darks[1, :, :])
         template[:] = np.nan
 
         detector_image(dark_fits, template, fig=QLfig, ax=DarkAxes[1], scale="sqrt",
@@ -633,12 +702,12 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
         DarkAxes[2].text(0.1, 0.5, "Average = only frame", color="white", fontsize=16+fontsizes[fs], transform=DarkAxes[2].transAxes)
 
     # If dark had a nan, show it but print a message.
-    if len(nan_dark_inds) != 0:
-        for i in nan_dark_inds:
-            DarkAxes[i].text(0, -0.05, "Dark frame with NaNs not included in dark subtraction.", fontsize=14, transform=DarkAxes[i].transAxes)
+    if len(bad_darks) != 0:
+        for i in bad_darks:
+            DarkAxes[i].text(0, -0.05, "Bad dark frame not included in dark subtraction.", fontsize=14, transform=DarkAxes[i].transAxes)
 
     # Plot the geometry frames ---------------------------------------------------------------------------------
-    if index_data_pair[0]['name'] in no_geo:
+    if light_md['name'] in no_geo:
         GeoAxes[0].text(0.1, 0.9, "No geometry available", fontsize=14+fontsizes[fs], transform=GeoAxes[0].transAxes)
 
         for a in GeoAxes:
@@ -653,24 +722,25 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     # Plot the light integration thumbnails ---------------------------------------------------------------------
     
     for i in range(n_ints):
-        if i in nan_light_inds:
+        if i in bad_light_types["nan"]:
             ThumbAxes[i].text(0.1, 1.1, "Missing data", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
-        elif i in bad_light_inds:
+        elif i in bad_light_types["corrupt"]:
+            ThumbAxes[i].text(0.1, 1.1, "Corrupted", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
+        elif i in bad_light_types["broken"]:
             ThumbAxes[i].text(0.1, 1.1, "Saturated/broken", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
-        elif i in light_frames_with_nan_dark:
+        elif i in bad_light_types["bad_dark"]:
             ThumbAxes[i].text(0.1, 1.1, "Bad dark", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
-        this_frame = data[i, :, :]
-
+        this_frame = light_fits['primary'].data[i, :, :]
         detector_image(light_fits, this_frame, fig=QLfig, ax=ThumbAxes[i], scale="sqrt",
                        print_scale_type=False, show_colorbar=False, arange=arange, plot_full_extent=False,)
         # print the alt
         thisalt = np.nanmean(light_fits['PixelGeometry'].data['PIXEL_CORNER_MRH_ALT'][i, get_ech_slit_indices(light_fits)[0]:get_ech_slit_indices(light_fits)[1]+1, -1])
         if not np.isnan(thisalt):
             thisalt = round(thisalt)
-            ThumbAxes[i].text(0.1, -0.05, f"{thisalt} km", color=color_dict['darkgrey'], va="top", fontsize=9+fontsizes[fs], transform=ThumbAxes[i].transAxes)
+            ThumbAxes[i].text(0.99, 1.1, f"{thisalt} km", color=color_dict['darkgrey'], va="top", ha="right", fontsize=9+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
-    ThumbAxes[0].text(0, 1.1, f"{n_good_frames} total light frames co-added (pre-dark subtraction frames shown below; listed altitude is mean minimum ray height altitude across spatial dimension on slit):", fontsize=22, transform=ThumbAxes[0].transAxes)
+    ThumbAxes[0].text(0, 1.1, f"{n_ints} total light frames co-added (raw frames shown below; listed altitude is mean minimum ray height altitude across spatial dimension on slit):", fontsize=22, transform=ThumbAxes[0].transAxes)
 
     # Explanatory text printing ----------------------------------------------------------------------------------
     utc_obj = iuvs_filename_to_datetime(light_fits['Primary'].header['filename'])
@@ -681,7 +751,7 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
     print_me = [f"Orbit {iuvs_orbno_from_fname(light_fits['Primary'].header['filename'])}:  {segment}",
                 f"Mars date: MY {My}, Sol {round(sol, 1)}, Ls {int(round(light_fits['Observation'].data['SOLAR_LONGITUDE'][0], ndigits=0))}°", 
                 f"UTC date/time: {utc_obj.strftime('%Y-%m-%d')}, {utc_obj.strftime('%H:%M:%S')}", 
-                f"{t1:<22}Light: {index_data_pair[0]['int_time']} s{'':<6}Dark: {index_data_pair[1]['int_time']} s",
+                f"{t1:<22}Light: {light_md['int_time']} s{'':<6}Dark: {dark_md['int_time']} s",
                 #
                 f"Light file: {re.search(fn_RE, light_path).group(0)}", 
                 f"Dark file: {re.search(fn_RE, dark_path).group(0)}",
@@ -722,9 +792,9 @@ def make_one_quicklook(index_data_pair, light_path, dark_path, no_geo=None, show
 
 
 # LINE FITTING PLOTS ========================================================
-def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, H_fit=None, D_fit=None, fit_IPH_component=None,
+def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, ints_to_plot, H_fit=None, D_fit=None, fit_IPH_component=None,
                    do_BU_background_comparison=False, print_fn_on_plot=True, plot_bg_separately=False, plot_subtract_bg=False, make_example_plot=False,
-                   BU_stuff=None, fig_savepath=None, restrict_x=True):
+                   BU_stuff=None, fig_savepath=None, restrict_x=True, figsz=(12,6), img_dpi=92, residax_ylim=None):
     """
     Given data and model information in physical units this makes some nice plots.
     Everything should be in physical units or you'll be sad.
@@ -741,6 +811,8 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
                  Contains model fit parameters for each integration in light_fits, in kR per nm.
     fit_unc : list of dictionaries
               Contains model fit uncertainties for each integration in light_fits, in kR per nm.
+    ints_to_plot : list
+                   list of integrations to make plots for. 
     H_fit :  array
              Individual line fit for H; should be supplied if make_example_plot is true
     D_fit : array
@@ -770,8 +842,8 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
     if do_BU_background_comparison:
         spec_BUbg, data_unc_BUbg, I_fit_BUbg, bg_array_BUbg, fit_params_BUbg, fit_unc_BUbg = BU_stuff
 
-    for (i, fp) in enumerate(fit_params):
-        fit_params_for_printing = fp | fit_unc[i] # Merge the parameter dictionaries
+    for i in ints_to_plot:
+        fit_params_for_printing = fit_params[i] | fit_unc[i] # Merge the parameter dictionaries
 
         # Plot fit
         # ============================================================================================
@@ -786,7 +858,7 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
                       t=titletext, fn_for_subtitle=thefnonly, plot_bg=bg_fits[i, :], plot_subtract_bg=plot_subtract_bg,
                       plot_bg_separately=plot_bg_separately, fig_savepath=(fig_savepath + f"frame{i}" if fig_savepath is not None else None), restrict_x=restrict_x, 
                       fit_IPH_component=(True if len(fit_IPH_component)==1 else fit_IPH_component[i]), 
-                      guideline_lbl_y=0.05)
+                      guideline_lbl_y=0.05, residax_ylim=residax_ylim, figsz=figsz, img_dpi=img_dpi)
 
         if do_BU_background_comparison:
             fit_params_for_printing_BUbg = fit_params_BUbg[i] | fit_unc_BUbg[i]
@@ -848,7 +920,7 @@ def example_fit_plot(data_wavelengths, data_vals, data_unc, model_fit, bg=None, 
 def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printing, wavelength_bin_edges=None, data_unc=None, 
                   mainax=None, residax=None, t="Fit", fn_for_subtitle="", make_residual_axis=True, print_on_axes=True,
                   logview=False, plot_bg=None, plot_subtract_bg=True, plot_bg_separately=False, fig_savepath=None,
-                  img_dpi=92, extra_print_on_plot=None, restrict_x=True, residax_ylim=None, fit_IPH_component=True,
+                  img_dpi=92, extra_print_on_plot=None, restrict_x=True, figsz=(12,6), residax_ylim=None, fit_IPH_component=True,
                   guideline_lbl_y=0):
     """
     Plots the fit defined by data_vals to the data, data_wavelengths and data_vals.
@@ -899,7 +971,7 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
     new_ax = False
     if mainax is None:
         new_ax = True
-        fig = plt.figure(figsize=(12,6))
+        fig = plt.figure(figsize=figsz)
 
         mygrid = gs.GridSpec(4, 1, figure=fig, hspace=0.1)
         mainax = plt.subplot(mygrid.new_subplotspec((0, 0), colspan=1, rowspan=3)) 
@@ -928,23 +1000,24 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
 
     # DEFINE WHAT TO PLOT AND HANDLE BACKGROUND
     # =========================================================================
+    plot_data = data_vals 
+    plot_model = model_fit
+    # Update it if the background is passed in to plot
     if plot_bg is not None:
         if plot_subtract_bg: # show subtracted arrays, don't plot background
             plot_data = data_vals - plot_bg
             plot_model = model_fit - plot_bg
         else: # show arrays with bg included, plot bg
-            plot_data = data_vals 
-            plot_model = model_fit
             if "failed_fit" not in fit_params_for_printing:
                 mainax.plot(data_wavelengths, plot_bg, label="background", linewidth=2, zorder=4, color=bg_color)
 
         med_bg = np.median(plot_bg)
-        if print_on_axes:
+        if print_on_axes and ~np.isnan(med_bg):
             mainax.text(0.99, 0.01, f"Median background: ~{round(med_bg)} kR/nm", fontsize=12, transform=mainax.transAxes, ha="right")
 
     residual = (data_vals - model_fit) 
 
-    # PLOT THE DATA AND MODEL ARRAYS
+    # PLOT THE DATA ARRAYS
     # =========================================================================
     mainax.errorbar(data_wavelengths, plot_data, yerr=data_unc, color=data_color, linewidth=0, elinewidth=1, zorder=3)
     mainax.step(data_wavelengths, plot_data, where="mid", color=data_color, label="processed data", zorder=4, alpha=0.7)
@@ -1031,11 +1104,17 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
         if "failed_fit" in fit_params_for_printing:
             printme.append("Bad frame - no fit.")
         else:
-            if "maxLL" in fit_params_for_printing:
-                printme.append(f"Min chi sq.: {round(fit_params_for_printing['maxLL']) * 2}") # * 2 because we want to show chi squared
-            if "minchisq" in fit_params_for_printing: 
-                printme.append(r"$\tilde{\chi}^2$: " + f"{round(fit_params_for_printing['minchisq'], 2)}")
 
+            if "maxLL" in fit_params_for_printing:
+                maxLL = fit_params_for_printing['maxLL']
+
+                printme.append(r"max $\ln\mathcal{L}$: "+f"{round(maxLL)}")
+                chisqrnd = round(fit_params_for_printing['minchisq'])
+                reduced_chisqrnd = round(fit_params_for_printing['reduced_chisq'], 2)
+                printme.append(r"$\chi^2$: "+f"{chisqrnd}")
+                printme.append(r"$\tilde{\chi}^2$: "+f"{reduced_chisqrnd}")
+
+            # Now do the stuff that should always be there....
             printme.append(f"H: {round(fit_params_for_printing['total_brightness_H'], 2)} ± {round(fit_params_for_printing['unc_total_brightness_H'], 2)} "+
                         f"kR (SNR: {round(fit_params_for_printing['total_brightness_H'] / fit_params_for_printing['unc_total_brightness_H'], 1)})")
             printme.append(f"D: {round(fit_params_for_printing['total_brightness_D'], 2)} ± {round(fit_params_for_printing['unc_total_brightness_D'], 2)} "+
@@ -1100,7 +1179,12 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
         plt.show()
 
     if fig_savepath is not None:
+        rootdir = fig_savepath.split('frame')[0]
+        if not os.path.isdir(rootdir):
+            os.makedirs(rootdir)
+
         plt.savefig(fig_savepath, dpi=img_dpi, bbox_inches="tight")
+        plt.close(fig)
     if new_ax:
         return fig
 

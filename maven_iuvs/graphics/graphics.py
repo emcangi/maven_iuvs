@@ -95,7 +95,7 @@ def JGR_format(dpi=300, display_widths=False, return_blue=False):
         return JGR_blue
 
 
-def get_grad_colors(L, cmap, strt=0, stp=1, mikes=False):
+def get_grad_colors(L, cmap, strt=0, stp=1, module="idl_colorbars"):
     """
     Generates some colors based on a GRADIENT color map for use in plotting a 
     bunch of lines all at once.
@@ -103,15 +103,15 @@ def get_grad_colors(L, cmap, strt=0, stp=1, mikes=False):
     Input:
         L: number of colors to generate.
         cmap: color map name
-        strt and stp: By setting these to other values between 0 and 1 you can restrict 
-                      the range of colors drawn from.
-        mikes: boolean
-               should be set to True if using Mike's idl_colorbars module,
-               so that the cmap is obtained correctly.
+        strt and stp: By setting these to other values between 0 and 1 you can
+                      restrict the range of colors drawn from.
+        module : string
+                 "matplotlib" or "idl_colorbars" - controls how the code will
+                 retrieve the colormap and draw values from it.
     Output:
         An array of RGBA values: [[R1, G1, B1, a], [R2, G2, B2, a]...]
     """
-    if mikes == True:
+    if module == "idl_colorbars":
         return cmap(np.linspace(strt,stp,L))
     else:
         return mpl.colormaps[cmap](np.linspace(strt,stp,L))
@@ -1431,7 +1431,7 @@ def make_alt_plot(fitfile, slit_inds, ax=None, ax2=None, t=""):
         return fig
 
 
-def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colorbars.getcmap(74), mikes=True):
+def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colorbars.getcmap(74), module="idl_colorbars"):
     """
     Plots the latitude and longitude of the spacecraft tangent line to the surface vs. integration.
     
@@ -1445,8 +1445,12 @@ def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colo
          Externally-created axis on which to draw the plot.
     t : string
         Optional extra text for the plot title
-    colmap : name of a colormap or a cmap object from Mike's idl_colorbars module
+    colmap : name of a colormap or a cmap object from the idl_colorbars module
              Colormap to use for the lines to show progression in time.
+    module : string
+             "matplotlib" or "idl_colorbars" - source for colormap; need to 
+             specify because the object that stores the colormap is different 
+             between matplotlib and idl_colorbars.
     
     Returns
     ----------
@@ -1464,7 +1468,7 @@ def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colo
     lon_arr = fitfile["PixelGeometry"].data["PIXEL_CORNER_LON"]
 
     total_ints = lat_arr.shape[0]    
-    colors = get_grad_colors(total_ints, colmap, mikes=mikes)
+    colors = get_grad_colors(total_ints, colmap, module=module)
         
     # Loop over integrations
     for i in range(0, lat_arr.shape[0]): 

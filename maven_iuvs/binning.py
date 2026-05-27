@@ -91,7 +91,7 @@ def pix_to_bin(hdul, pix0, pix1, spa_or_spe, return_npix=True):
            Lowest pixel number in the given dimension to include
     pix1 : int
            Highest pixel number in the given dimension to include
-    spa_or_spe : string
+    spa_or_spe : string, "spatial" or "spectral"
                  indicates whether this function will convert spatial or
                  spectral pixels to bins
     return_npix : boolean
@@ -108,28 +108,28 @@ def pix_to_bin(hdul, pix0, pix1, spa_or_spe, return_npix=True):
            number of total pixels in the enclosed bins
 
     """
-    spapixbounds, spapixtransmit = get_bin_pix_boundaries(hdul, which="spatial")
-    i0_allbins = np.searchsorted(spapixbounds, pix0 + 0.01) - 1
-    i1_allbins = np.searchsorted(spapixbounds, pix1 + 0.01) - 1
+    pixbounds, pixtransmit = get_bin_pix_boundaries(hdul, which=spa_or_spe)
+    i0_allbins = np.searchsorted(pixbounds, pix0 + 0.01) - 1
+    i1_allbins = np.searchsorted(pixbounds, pix1 + 0.01) - 1
 
     # Check that the index found corresponds to a transmitted bin
-    if spapixtransmit[i0_allbins] == 0 or spapixtransmit[i1_allbins] == 0:
+    if pixtransmit[i0_allbins] == 0 or pixtransmit[i1_allbins] == 0:
         raise ValueError("selected pixel range falls outside transmitted data range!")
 
-    spapix_not_transmit = 1 - spapixtransmit
+    pix_not_transmit = 1 - pixtransmit
 
-    i0_transmitted_bins = i0_allbins - np.cumsum(spapix_not_transmit)[i0_allbins]
-    i1_transmitted_bins = i1_allbins - np.cumsum(spapix_not_transmit)[i1_allbins]
+    i0_transmitted_bins = i0_allbins - np.cumsum(pix_not_transmit)[i0_allbins]
+    i1_transmitted_bins = i1_allbins - np.cumsum(pix_not_transmit)[i1_allbins]
 
     if return_npix:
-        binpixwidth = hdul['Binning'].data[spa_or_spe+'BINWIDTH']
+        binpixwidth = hdul['Binning'].data[spa_or_spe[:3]+'BINWIDTH'][0]
         npix = np.sum(binpixwidth[i0_allbins:i1_allbins])
         return i0_transmitted_bins, i1_transmitted_bins, npix
 
     return i0_transmitted_bins, i1_transmitted_bins
 
 
-def get_bin_pix_boundaries(myfits, which):
+def get_bin_pix_boundaries(myfits, which, return_high_bdys=False):
     """Given a fits observation, gets the bin lower boundaries in pixels,
     and whether that bin was transmitted, for either the spatial or
     spectral dimension.
@@ -156,12 +156,14 @@ def get_bin_pix_boundaries(myfits, which):
     pixwidth = myfits['Binning'].data[f'{which[:3]}binwidth'][0]
     pixtransmit = myfits['Binning'].data[f'{which[:3]}bintransmit'][0]
 
-    pixboundaries = np.cumsum(pixwidth)
-    pixboundaries = np.concatenate([[0], pixboundaries])
+    pix_low_boundaries = np.cumsum(pixwidth)
+    pix_low_boundaries = np.concatenate([[0], pix_low_boundaries])
 
-    # raise Exception("stop here")
+    if return_high_bdys:
+        pix_high_boundaries = pix_low_boundaries[:-1] + pixwidth
+        return pix_low_boundaries, pixtransmit, pix_high_boundaries
 
-    return pixboundaries, pixtransmit
+    return pix_low_boundaries, pixtransmit
 
 
 def get_npix_per_bin(myfits, transmitted_only=True):

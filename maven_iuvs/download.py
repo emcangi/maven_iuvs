@@ -103,6 +103,9 @@ def setup_user_paths():
     
     idl_pipeline_dir = input("Where would you like to put the IDL pipeline"
                              " directory? (Required for echelle; location of LSF file.)")
+    
+    pds_deliveries_dir = input("Where would you like to put the PDS deliveries"
+                             " directory?")
 
     # determine whether to load SPICE kernels automatically on startup
     while True:
@@ -133,6 +136,7 @@ def setup_user_paths():
     user_paths_file.write("iuvs_vm_username = \""+vm_username+"\"\n")
     user_paths_file.write("auto_spice_load = "+auto_spice_load+"\n")
     user_paths_file.write("idl_pipeline_dir = \""+idl_pipeline_dir+"\"\n")
+    user_paths_file.write("pds_deliveries_dir = \""+pds_deliveries_dir+"\"\n")
     user_paths_file.close()
 
     # now scripts can import the relevant directories from user_paths
@@ -142,6 +146,8 @@ def get_default_data_directory(level='l1b'):
     """
     Returns default l1b_dir defined in user_paths.py, creating the
     file if needed.
+
+    TODO: Replace 'level' with something more general. 
 
     Parameters
     ----------
@@ -156,17 +162,25 @@ def get_default_data_directory(level='l1b'):
     # TODO: separate l1b_setup logic from spice setup logic
     setup_user_paths()
 
-    # get the path from the possibly newly created file
-    from maven_iuvs.user_paths import l1b_dir, l1a_dir, l1a_full_mission_reprocess_dir  # don't move this
+    # get the path from the possibly newly created file: don't move this
+    from maven_iuvs.user_paths import l1b_dir, l1a_dir, \
+        l1a_full_mission_reprocess_dir, idl_pipeline_dir, pds_deliveries_dir
 
+    # TODO: replace this witha dictionary
     if level == 'l1b':
         local_dir = l1b_dir
     elif level == 'l1a':
         local_dir = l1a_dir
     elif level == 'l1a_full_mission_reprocess':
         local_dir = l1a_full_mission_reprocess_dir
+    elif level == 'idl_pipeline_dir':
+        local_dir = idl_pipeline_dir
+    elif level == 'pds_deliveries_dir':
+        local_dir = pds_deliveries_dir
     else:
-        raise ValueError("level must be 'l1a' or 'l1b'")
+        raise ValueError("Allowed values: 'l1a', 'l1b', " \
+                         "'l1a_full_mission_reprocess', 'idl_pipeline_dir', " \
+                         "'pds_deliveries_dir' ")
 
     if not os.path.exists(local_dir):
         raise Exception("Cannot find specified directory: "
@@ -408,6 +422,8 @@ def sync_data(spice=True, level='l1b',
               delete_old=None,
               iuvs_vm_password=None,
               ssh_pkey=None,
+              ex_rsync_flags="",
+              omit_ext=False,
               **filename_kwargs):
     """
     Synchronize new SPICE kernels and L1B data from the VM and remove
@@ -437,6 +453,18 @@ def sync_data(spice=True, level='l1b',
 
         Defaults to None, which will raise an interactive prompt.
 
+    iuvs_vm_password : string
+                       Password for user account to VM. Please do not use, it is
+                       bad security practice. Use an SSH key.
+    ssh_pkey : string
+                Path to ssh private key to match the public key that you 
+                hopefully uploaded to the VM.
+    ex_rsync_flags : string
+                     Optional flags to pass to the rsync command
+    omit_ext : boolean
+               if True, will not add an extension to the glob search so that
+               .xml in addition to .fits.gz may be returned.
+
     filename_kwargs : **kwargs
         One or more of level, segment, orbit, channel, date_time, or
         pattern, used to search for IUVS FITS files by by
@@ -448,7 +476,7 @@ def sync_data(spice=True, level='l1b',
     """
 
     # setup search pattern
-    pattern = get_filename_glob_string(**filename_kwargs)
+    pattern = get_filename_glob_string(omit_ext=omit_ext, **filename_kwargs)
 
     #  check if user path data exists and set it if not
     setup_user_paths()
@@ -514,7 +542,7 @@ def sync_data(spice=True, level='l1b',
         # sync SPICE kernels
         if spice:
             print('Updating SPICE kernels...')
-            exflags_rsync = "--delete"
+            exflags_rsync = ex_rsync_flags + " --delete"
             if ssh_pkey is not None:
                 exflags_rsync = exflags_rsync + f' ssh -i {ssh_pkey}'
 
@@ -560,9 +588,23 @@ def sync_data(spice=True, level='l1b',
             # get the list of most recent files, no matter where they are
             #    order matters! putting local_filenames last ensures
             #    duplicates aren't checked or transferred
-            files_to_sync = get_latest_files(np.concatenate([prod_filenames,
-                                                             stage_filenames,
-                                                             local_filenames]))
+            # TODO: This WILL NOT update files that have been modified on the 
+            # VM but haven't otherwise changed names
+            if "--update" in ex_rsync_flags:
+                concatted_filelists = np.concatenate([local_filenames, 
+                                                      prod_filenames,
+                                                      stage_filenames,
+                                                     ])
+            else:
+                concatted_filelists = np.concatenate([prod_filenames,
+                                                      stage_filenames,
+                                                      local_filenames
+                                                     ])
+                print("Warning: Getting latest files typically ignores modification " \
+                      "time. If you need to update files that didn't change name," \
+                      "pass in --update flag to ex_rsync_flags.")
+            
+            files_to_sync = get_latest_files(concatted_filelists)
 
             # figure out which files to get from production and stage
             files_from_production = [a[len(production_vm):]
@@ -587,7 +629,7 @@ def sync_data(spice=True, level='l1b',
 
             print('Syncing ' + str(len(files_from_production)) +
                   ' files from production...')
-            exflags_prod = f'--files-from={transfer_from_production_file.name}'
+            exflags_prod = ex_rsync_flags + " --files-from={transfer_from_production_file.name}"
             if ssh_pkey is not None:
                 exflags_prod = exflags_prod + f' --rsh="ssh -i {ssh_pkey}"'
                             
@@ -605,7 +647,7 @@ def sync_data(spice=True, level='l1b',
             if stage_vm is not None:
                 print('Syncing ' + str(len(files_from_stage)) +
                       ' files from stage...')
-                exflags_stage = f'--files-from={transfer_from_stage_file.name}'
+                exflags_stage = ex_rsync_flags + " --files-from={transfer_from_stage_file.name}"
                 if ssh_pkey is not None:
                     exflags_stage = exflags_stage + f' --rsh="ssh -i {ssh_pkey}"'
 

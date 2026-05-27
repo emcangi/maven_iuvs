@@ -1,5 +1,37 @@
 import numpy as np
 from sklearn import linear_model
+import math
+
+def chisquared(LL, N, logdetcov, p=0, reduced=False):
+    """
+    Computes chisquared given some log likelihood and ln(det(covariance)), that
+    is, it assumes non-independent (correlated) Gaussian variates.
+
+    Parameters
+    ----------
+        LL : int or float
+             Log likelihood computed by fit algorithm
+        N : int
+            number of bins in our case
+        logdetcov : array
+                 log-determinant of the covariance (correlation * unc^2)
+        p : int
+            number of model parameters, used to compute reduced chisq
+        reduced : bool
+                  False > returns normal chi squared. True > returns reduced
+
+    Returns
+    ----------
+    chisq : float
+            chi squared value, normal or reduced.
+    """
+
+    chisq = -2 * (LL + (N/2)*np.log(2*math.pi) + 0.5 * logdetcov)
+
+    if reduced:
+        return chisq * (1/(N-p))
+
+    return chisq
 
 
 def multiple_linear_regression(templates, spectrum, spectrum_error):

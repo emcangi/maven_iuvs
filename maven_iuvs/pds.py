@@ -23,17 +23,9 @@ def verify_pds_completion(pdsno):
                                + "light-dark-pair-lists/pds_deliveries_v14/" 
                                + f"pds{pdsno}_LD.csv"
                              )
-    label_files = []
-    fits_files = []
 
-    for _, _, f in os.walk(this_pds_folder):
-        
-        for thisfile in f:
-            if ".xml" in thisfile:
-                label_files.append(thisfile)
-            if "fits.gz" in thisfile:
-                fits_files.append(thisfile)
-
+    fits_files = dropxml(os.listdir(this_pds_folder))
+    label_files = list(set(os.listdir(this_pds_folder)).difference(set(fits_files)))
 
     # Verify all fits files are present
     success = 0
@@ -131,6 +123,9 @@ def get_pds_dates(pdsno):
                 43: {"start_datetime": datetime.datetime(2025, 5, 15, 0, 0, 0),
                      "end_datetime": datetime.datetime(2025, 8, 14, 23, 59, 59),
                      "due_VM": datetime.datetime(2025, 10, 15, 0, 0, 0)},
+                44: {"start_datetime": datetime.datetime(2025, 8, 15, 0, 0, 0),
+                     "end_datetime": datetime.datetime(2025, 11, 14, 23, 59, 59),
+                     "due_VM": datetime.datetime(2026, 1, 15, 0, 0, 0)},
                 }
 
     # Set the delivery due date, start date for the data range, and end date for data range.
