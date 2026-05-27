@@ -794,7 +794,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
 # LINE FITTING PLOTS ========================================================
 def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params, fit_unc, ints_to_plot, H_fit=None, D_fit=None, fit_IPH_component=None,
                    do_BU_background_comparison=False, print_fn_on_plot=True, plot_bg_separately=False, plot_subtract_bg=False, make_example_plot=False,
-                   BU_stuff=None, fig_savepath=None, restrict_x=True, figsz=(12,6), img_dpi=92, residax_ylim=None):
+                   BU_stuff=None, fig_savepath=None, restrict_x=True, figsz=(12,6), img_dpi=92, residax_ylim=None, title_extra_txt=""):
     """
     Given data and model information in physical units this makes some nice plots.
     Everything should be in physical units or you'll be sad.
@@ -847,7 +847,7 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
 
         # Plot fit
         # ============================================================================================
-        titletext = f"Orbit {re.search(orbno_RE, light_l1a_path).group(0)} - Integration {i} - v15"
+        titletext = f"Orbit {re.search(orbno_RE, light_l1a_path).group(0)} - Integration {i} - v15 {title_extra_txt}"
 
         if print_fn_on_plot:
             thefnonly =  re.search(fn_RE, light_l1a_path).group(0)
@@ -856,7 +856,8 @@ def make_fit_plots(light_l1a_path, wavelengths, arrays_for_plotting, fit_params,
 
         plot_line_fit(wavelengths, spec[i, :], I_fit[i, :], fit_params_for_printing, data_unc=data_unc[i, :],
                       t=titletext, fn_for_subtitle=thefnonly, plot_bg=bg_fits[i, :], plot_subtract_bg=plot_subtract_bg,
-                      plot_bg_separately=plot_bg_separately, fig_savepath=(fig_savepath + f"frame{i}" if fig_savepath is not None else None), restrict_x=restrict_x, 
+                      plot_bg_separately=plot_bg_separately, restrict_x=restrict_x, 
+                      fig_savepath=(fig_savepath + f"frame{i}_{thefnonly[:-8].replace('l1a', 'l1c').replace('v14', 'v15')}" if fig_savepath is not None else None), 
                       fit_IPH_component=(True if len(fit_IPH_component)==1 else fit_IPH_component[i]), 
                       guideline_lbl_y=0.05, residax_ylim=residax_ylim, figsz=figsz, img_dpi=img_dpi)
 
@@ -960,6 +961,7 @@ def plot_line_fit(data_wavelengths, data_vals, model_fit, fit_params_for_printin
             whether an IPH component was fit for this observation
     """
     # STYLES
+    plt.style.use('default') # Ensure dark background is not used if being called in a notebook
     mpl.rcParams["font.sans-serif"] = "Louis George Cafe"
     mpl.rcParams['font.size'] = 18
     mpl.rcParams['legend.fontsize'] = 16
