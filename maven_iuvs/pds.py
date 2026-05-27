@@ -2,12 +2,13 @@ import os
 import datetime
 import pandas as pd
 from maven_iuvs.download import get_default_data_directory
+from maven_iuvs.search import dropxml
 
 
 # def process_pds_delivery():
     # TODO: Build this so don't have to use IDL
 
-def verify_pds_completion(pdsno):
+def verify_pds_completion(pdsno, v="v14"):
     """
     Checks that all files slated for processing in PDS delivery # pdsno
     are successfully processed.
@@ -18,26 +19,30 @@ def verify_pds_completion(pdsno):
             Number of PDS delivery to check
     """
     this_pds_folder = get_default_data_directory('pds_deliveries_dir') \
-                      + "pds{pdsno}/"
+                      + f"pds{pdsno}/"
     target_list = pd.read_csv(get_default_data_directory('idl_pipeline_dir')
                                + "light-dark-pair-lists/pds_deliveries_v14/" 
                                + f"pds{pdsno}_LD.csv"
                              )
 
     fits_files = dropxml(os.listdir(this_pds_folder))
+    # get rid of any csvs
+    fits_files = [f for f in fits_files if ".fits" in f]
     label_files = list(set(os.listdir(this_pds_folder)).difference(set(fits_files)))
+    label_files = [lf for lf in label_files if ".xml" in lf]
 
     # Verify all fits files are present
     success = 0
     failure = 0
-    for (_, l1afn) in zip(target_list["Light Folder"], target_list["Light"]):
+    for (_, l1afn) in zip(target_list["Light_Folder"], target_list["Light"]):
         # Construct what the filename should be
-        l1c_fn = l1afn.replace("l1a", "l1c")
+        l1c_fn = l1afn.replace("l1a", "l1c").replace("v13", v)
 
         # Check if in the list of finished files
-        if l1c_fn in fits_files:
+        if l1c_fn in fits_files or l1c_fn[:-3] in fits_files:
             success += 1
         else:
+            print(f"Couldn't find file: {l1c_fn}")
             failure += 1
 
     if (failure == 0) and (success == len(target_list["Light"])):
@@ -86,6 +91,9 @@ def make_pds_csv(pdsno, keyfile, savepath=None):
     criterion = (pds_startdate <= df["DTobj"]) & (df["DTobj"] <= pds_enddate)
     pds_df = df[criterion]
     pds_df.reset_index(inplace=True, drop=True)
+
+    # Rename some column headers because IDL doesn't like spaces
+    pds_df = pds_df.rename(columns={'Light Folder': 'Light_Folder', 'Dark Folder': 'Dark_Folder'})
     if savepath is not None:
         pds_df.to_csv(savepath, index=False)
     return pds_df
@@ -125,6 +133,9 @@ def get_pds_dates(pdsno):
                      "due_VM": datetime.datetime(2025, 10, 15, 0, 0, 0)},
                 44: {"start_datetime": datetime.datetime(2025, 8, 15, 0, 0, 0),
                      "end_datetime": datetime.datetime(2025, 11, 14, 23, 59, 59),
+                     "due_VM": datetime.datetime(2026, 1, 15, 0, 0, 0)},
+                44.5: {"start_datetime": datetime.datetime(2025, 11, 15, 0, 0, 0),
+                     "end_datetime": datetime.datetime(2025, 12, 7, 23, 59, 59),
                      "due_VM": datetime.datetime(2026, 1, 15, 0, 0, 0)},
                 }
 
