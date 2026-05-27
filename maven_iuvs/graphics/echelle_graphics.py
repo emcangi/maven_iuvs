@@ -604,7 +604,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
         fit_params_collected = fit_params_kR[0] | fit_unc_kR[0]
         plot_line_fit(wl, spec_kR_pernm, I_fit_kR_pernm, fit_params_collected, 
                       data_unc=data_unc_kR_pernm, 
-                      mainax=DetAxes[0],make_residual_axis=False, t="", 
+                      mainax=DetAxes[0], make_residual_axis=False, t="", 
                       fn_for_subtitle="", print_on_axes=False,
                       plot_bg=bg_array_kR_pernm, guideline_lbl_y=1.1,
                       restrict_x=False,fit_IPH_component=True)

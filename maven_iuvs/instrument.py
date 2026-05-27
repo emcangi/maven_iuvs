@@ -275,8 +275,8 @@ def convert_spectrum_DN_to_photoevents(light_fits, spectrum):
 
 def DN_to_PE_conversion_factor(light_fits):
     """
-    For a given light observation file, this returns the conversion factor which, when multiplied by a spectrum in DN/sec/nm,
-    will convert the spectrum to photons.
+    For a given light observation file, this returns the conversion factor which, 
+    when multiplied by a spectrum in DN/sec/nm, converts DN to photoevents.
 
     Parameters
     ----------
@@ -291,7 +291,7 @@ def DN_to_PE_conversion_factor(light_fits):
     gain = light_fits['Engineering'].data['MCP_GAIN'][0] # MCP gain in DN
     gain_v = mcp_dn_to_volt(gain)  # gives Gain in Volts
     gain_PE  = mcp_volt_to_gain(gain_v, channel=light_fits["Engineering"].data["XUV"])  # gives Gain in PhotoElectrons    
-    conv_factor = 1 / (gain_PE)
+    conv_factor = 1 / (gain_PE) # Units: DN/photoevents i think
 
     return conv_factor
 
@@ -326,7 +326,8 @@ def ran_DN_uncertainty(light_fits, datacube_override=None):
     if ~(np.diff(npix_eachbin) == 0).all():
         raise ValueError("Some unhandled problem with the binning scheme?")
 
-    npix_perbin = npix_eachbin[0, 0]  # Assuming everything is k, we can do this
+    npix_perbin = npix_eachbin[0, 0]  # Assuming number of pixels per bin is consistent,
+                                      # this is allowed
 
     # Following lines are from the IDL pipeline, file: 
     sigma_background = 4313 * math.sqrt(light_fits["Primary"].header["INT_TIME"]/60) * math.sqrt(npix_perbin/480.)/(2**((850-volt)/50.)) 

@@ -128,7 +128,7 @@ def weekly_echelle_report(weeks_before_now_to_report, root_folder):
     weekly_lights_missing_darks = [fidx['name'] 
                                    for fidx in weekly_report_idx 
                                    if (ech_islight(fidx) 
-                                       and 
+                                       and
                                        len(find_dark_options(fidx, weekly_report_dark_idx))<1)]
     if len(weekly_lights_missing_darks) == 0:
         print('\nAll lights have appropriate darks.')
@@ -3663,7 +3663,7 @@ def get_wavelengths(light_fits):
     spebinwidth = spebinw[np.where(spebint == 1)]
 
     # the following is basically the index of Ly alpha in the finished grid 
-    xH1215 = (ech_best_H_pixel - spepixlo)/spebinwidth  
+    xH1215 = (ech_best_H_pixel - spepixlo)/spebinwidth
 
     A = np.arange(Nwavelengths)*ech_dH1215*2
     B = (Lya_lab*10 - (xH1215*ech_dH1215*2))
@@ -3855,7 +3855,7 @@ def predict_IPH_linecenter(light_fits):
 
 # Write out with IDL ==========================================================
 
-def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits, 
+def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_fits,
                             fit_params_list, fit_unc_list,
                             arrays_kR, arrays_DN, 
                             bright_data_ph_per_s_array, 

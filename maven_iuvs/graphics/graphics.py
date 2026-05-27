@@ -1464,6 +1464,8 @@ def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colo
         fig = plt.figure(figsize=(5, 5))
         ax = fig.add_subplot(1, 1, 1)
 
+    # Shape of these is: (integrations, spatial, pixel_part)
+    # "pixel_part" has length 5. First 4 are the corners. Last is the pixel center.
     lat_arr = fitfile["PixelGeometry"].data["PIXEL_CORNER_LAT"]
     lon_arr = fitfile["PixelGeometry"].data["PIXEL_CORNER_LON"]
 
@@ -1472,10 +1474,18 @@ def make_tangent_lat_lon_plot(fitfile, slit_inds, ax=None, t="", colmap=idl_colo
         
     # Loop over integrations
     for i in range(0, lat_arr.shape[0]): 
-        # int=i, plot only the slit inds, only the center of pixel.
-        ax.scatter(lon_arr[i, slit_inds[0], -1], lat_arr[i, slit_inds[0], -1], marker="o", color=colors[i, :]) # Start; 
-        ax.scatter(lon_arr[i, slit_inds[1]+1, -1], lat_arr[i, slit_inds[1]+1, -1], marker="x", color=colors[i, :]) # end of slit 
-        ax.plot(lon_arr[i, slit_inds[0]:slit_inds[1]+1, -1], lat_arr[i, slit_inds[0]:slit_inds[1]+1, -1], color=colors[i, :], linewidth=2)
+        # Scatter markers at either end of the slit, center of the pixel.
+        ax.scatter(lon_arr[i, slit_inds[0], -1], # Start of slit
+                   lat_arr[i, slit_inds[0], -1],
+                   marker="o", color=colors[i, :])
+        ax.scatter(lon_arr[i, slit_inds[1]+1, -1], # End of slit
+                   lat_arr[i, slit_inds[1]+1, -1], 
+                   marker="x", color=colors[i, :])
+
+        # Draw a line from start to end:
+        ax.plot(lon_arr[i, slit_inds[0]:slit_inds[1]+1, -1], 
+                lat_arr[i, slit_inds[0]:slit_inds[1]+1, -1], 
+                color=colors[i, :], linewidth=2)
 
     ax.tick_params(axis="both", labelsize=16)
     ax.set_xlabel("Longitude", fontsize=20)
