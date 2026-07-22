@@ -324,8 +324,8 @@ def main():
 
     # STARTING VERSION AND FOLDER DECLARATION
     # =============================================================================
-    v = "v14"
-    which_l1a = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
+    l1a_version = "v14"
+    l1a_foldername = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
     IDL_FOLD = "/home/ubuntu/fake_idl_dir/" #IUVS_FOLD + "IDL_pipeline/"
     # L1c base 
     IUVS_DATA_DIR = "/MAVEN/IUVS/full_mission_reprocess/products/level1a/"
@@ -344,8 +344,8 @@ def main():
     # LOAD INDICES
     # =============================================================================
     metadata_dir = "/home/ubuntu/WorkingDir/"
-    ech_l1a_idx = get_dir_metadata(get_default_data_directory(which_l1a[v]),
-                                   version="v14", geospatial=True, idx_dir=metadata_dir)
+    ech_l1a_idx = get_dir_metadata(get_default_data_directory(l1a_foldername[l1a_version]),
+                                   version=l1a_version, geospatial=True, idx_dir=metadata_dir)
 
     # Find geometry files
     lights_with_geom = find_files_with_geometry(ech_l1a_idx)
