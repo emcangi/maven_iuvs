@@ -328,8 +328,15 @@ def main():
     l1a_foldername = {"v13": "l1a", "v14": "l1a_full_mission_reprocess"}
     IDL_FOLD = "/home/ubuntu/fake_idl_dir/" #IUVS_FOLD + "IDL_pipeline/"
     # L1c base 
-    IUVS_DATA_DIR = "/MAVEN/IUVS/full_mission_reprocess/products/level1a/"
-    L1C_DIR = "/MAVEN/IUVS/full_mission_reprocess/echelle_lasp/FMR_v14_l1a_to_v15_l1c/new_LSF/"
+    #IUVS_DATA_DIR = "/MAVEN/IUVS/full_mission_reprocess/products/level1a/"
+
+    if py_process_kwargs["calibration"] == "v14":
+        print("WARNING: Old LSF being used")
+        rfold = "old_LSF"
+    else:
+        rfold = "new_LSF"
+
+    L1C_DIR = f"/MAVEN/IUVS/full_mission_reprocess/echelle_lasp/FMR_v14_l1a_to_v15_l1c/{rfold}/"
 
     keyname = "MASTER_LIGHT_DARK_KEY_v14_AWS.csv"
     PF = "/home/ubuntu/GITREPOS/maven_iuvs/maven_iuvs/ancillary/" + keyname
