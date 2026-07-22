@@ -3627,7 +3627,7 @@ def load_lsf(calibration="v15"):
     v15 = Python pipeline, CU/LASP)
     """
     if calibration=="v14" or calibration=="v13":
-        lsf_v14 = sp.io.readsav(f"{idl_pipeline_dir}/lsf_new.idl", idict=None, python_dict=False)
+        lsf_v14 = sp.io.readsav(f"{idl_pipeline_dir}lsf_v14.idl", idict=None, python_dict=False)
         sav_var_names = {"v14": ["echw", "echf"], 
                         "v13": ["w", "f"]
                         }[calibration]
