@@ -146,7 +146,7 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp,
 def obs_worker(process_timestamp, obs_md, orbfold, ldkey, shared_results, lock, 
                py_process_kwargs, # new
                idl_process_kwargs, clean_data_kwargs, make_plots, overwrite, 
-               save_arrays, fitter, writeout):
+               save_arrays, writeout):
     """
     Worker function for a particular file;
 
