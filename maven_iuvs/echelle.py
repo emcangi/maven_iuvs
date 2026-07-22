@@ -2085,6 +2085,10 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
                        use_BU_bg=False, fitter='dynesty', 
                        do_BU_background_comparison=False, 
                        run_writeout=True, overwrite=False, make_plots=True, 
+                       py_process_kwargs = {"fitter": "dynesty",
+                                            "livepts": 50,
+                                            "bound": "multi",
+                                            "calibration": "v15"},
                        idl_process_kwargs = {"open_idl": False, 
                                              "proc": None, 
                                              "stderr_queue": None, 
@@ -2227,7 +2231,11 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
         I_fit_BUbg, \
             H_fit_BUbg, D_fit_BUbg, IPH_fit_BUbg, \
             fit_params_BUbg, fit_uncertainties_BUbg = fit_flat_data(light_fits, spectrum, data_unc, ints_to_fit=ints_to_fit,
-                                                                    BU_bg=backgrounds_BU,
+                                                                    BU_bg=backgrounds_BU, 
+                                                                    fitter=py_process_kwargs["fitter"],
+                                                                    calibration=py_process_kwargs["calibration"],
+                                                                    livepts=py_process_kwargs["livepts"],
+                                                                    bound=py_process_kwargs["bound"],
                                                                     return_each_line_fit=return_each_line_fit, **kwargs)
         # no need to make  background array for this one, its already made because it's prescribed
         #
@@ -2251,8 +2259,11 @@ def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c
     
     # Do basic fit in DN
     I_fit, H_fit, D_fit, IPH_fit, fit_params, fit_uncertainties = fit_flat_data(light_fits, spectrum, data_unc, 
-                                                                                calibration=calibration,
-                                                                                BU_bg=precalc_bg, fitter=fitter,
+                                                                                fitter=py_process_kwargs["fitter"],
+                                                                                calibration=py_process_kwargs["calibration"],
+                                                                                livepts=py_process_kwargs["livepts"],
+                                                                                bound=py_process_kwargs["bound"],
+                                                                                BU_bg=precalc_bg,
                                                                                 bad_frames=i_badlights, 
                                                                                 ints_to_fit=ints_to_fit,
                                                                                 return_each_line_fit=return_each_line_fit, 
@@ -3161,9 +3172,9 @@ def get_kernel_array(n_wave_bins=332):
     Parameters
     ----------
     n_wave_bins : int
-                          what it says on the tin. Currently we don't have a 
-                          kernel for other wavelength binning mostly because we
-                          have never done any other wavelength binning. AFAWK.
+                what it says on the tin. Currently we don't have a 
+                kernel for other wavelength binning mostly because we
+                have never done any other wavelength binning. AFAWK.
 
     Returns
     ----------
