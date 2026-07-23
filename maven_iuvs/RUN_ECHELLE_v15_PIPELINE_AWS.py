@@ -18,8 +18,10 @@ import numpy as np
 from astropy.io import fits
 import argparse
 from pathlib import Path
-import cProfile
-import pstats
+#import cProfile
+#import pstats
+import datetime
+import pytz
 
 # statistics.py is duplicated in maven_iuvs, but it's also a base package.
 # this causes problems when this script lives where maven_iuvs lives.
@@ -47,6 +49,7 @@ parser.add_argument('start_orb', type=int,
                     help='Start orbit (multiple of 100)')
 parser.add_argument('end_orb', type=int, 
                     help='End orbit (multiple of 100) -- will not be included')
+parser.add_argument('lsf_cal', type=str, help='v14 or v15, version for LSF')
 
 args = parser.parse_args()
 
@@ -134,7 +137,8 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp,
 
         tf = datetime.datetime.now()
 
-        print(f"Finished with file {obs_md['name']} in {tf-ti} seconds. ")
+        print(f"Finished with file {obs_md['name']} in {tf-ti} (h, m, s)" +
+               f" at {datetime.datetime.now(pytz.timezone('America/Denver'))} MT")
         print("continuing...")
         print()
         return status 
@@ -317,7 +321,7 @@ def main():
     py_process_kwargs = {"fitter": "dynesty",  #or scipy
                     "livepts": 50, # Shoot for n*2, where n = number of degrees of freedom. 50 is conservative
                     "bound": "multi", # this is a good default
-                    "calibration": "v15"}  # v15 = new LSF, v14 = old LSF
+                    "calibration": args.lsf_cal} # v15 = new LSF, v14 = old LSF. from command line args
     idl_process_kwargs = {}  # Will store any arguments for controlling IDL processing
 
     reportext = ""  # Extra text to append to processing report filename
