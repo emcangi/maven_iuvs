@@ -118,7 +118,7 @@ def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=Non
             try:
                 dark_md = [i for i in dark_idx if i['name'] == dfile][0]
             except IndexError:
-                raise IndexError("Unhandled exception: Couldn't find a dark for {lfile}")
+                raise IndexError(f"Unhandled exception: Couldn't find a dark for {lfile}")
 
 
         quicklook_status = ""
