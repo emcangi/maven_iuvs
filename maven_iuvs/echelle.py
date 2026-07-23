@@ -1426,11 +1426,10 @@ def find_bad_light_frames(light_fits, bad_darks):
     corrupt_frames = get_corrupt_frames(light_fits)
 
     all_bad_lights = sorted(list(set([*nan_light_inds, *bad_light_inds,
-                                      *lights_with_bad_darks, *corrupt_frames])))
+                                      *corrupt_frames])))
 
     return all_bad_lights, {"nan": nan_light_inds, 
                             "broken": bad_light_inds, 
-                            "bad_dark": lights_with_bad_darks, 
                             "corrupt": corrupt_frames}
 
 
