@@ -1430,6 +1430,7 @@ def find_bad_light_frames(light_fits, bad_darks):
 
     return all_bad_lights, {"nan": nan_light_inds, 
                             "broken": bad_light_inds, 
+                            "bad_dark": lights_with_bad_darks,
                             "corrupt": corrupt_frames}
 
 
