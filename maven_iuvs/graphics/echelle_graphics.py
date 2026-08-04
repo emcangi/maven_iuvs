@@ -38,7 +38,7 @@ guideline_color = "xkcd:cool gray"
 
 # QUICKLOOK CODE =========================================================================================
 
-def run_quicklooks(ech_l1a_idx, v="v13", selected_l1a=None, date=None, orbit=None, verbose=False,
+def run_quicklooks(ech_l1a_idx, v="v14", selected_l1a=None, date=None, orbit=None, verbose=False,
                    segment=None, savefolder=None, keyfile_folder="/", **kwargs):
     """
     Runs quicklooks for the files in ech_l1a_idx, downselected by either date, orbit, or segment.
@@ -781,12 +781,19 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
     if savefolder is not None:
         plt.savefig(ql_filepath, dpi=img_dpi, bbox_inches="tight")
         plt.close(QLfig)
+        plt.clf()  # Clear all figure state
+        plt.cla()  # Clear current axes state
 
     plt.close(QLfig) # make SURE it's closed
-    # turn these on if needed
+    # Delete everything explicitly to avoid memory leaks
     del QLfig
     del light_fits
     del dark_fits
+    del covmat, covmat_inv, logdet_covmat
+    del data, coadded_lights, detector_image_to_plot, coadded_unc
+    del coadded_spec, spec_kR_pernm, data_unc_kR_pernm
+    del fit_params, fit_params_dict, fit_unc_dict
+    del fit_succeeded, bg_fit, arrays_in_DN, arrays_in_kR_pernm
     gc.collect()
     return "Success" 
 
