@@ -651,7 +651,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
     DetAxes[0].legend(fontsize=6+fontsizes[fs])
 
     # Plot the main detector image -------------------------------------------------------------------------
-    detector_image(light_fits, detector_image_to_plot,
+    detector_image(light_fits, data=detector_image_to_plot,
                    fig=QLfig, ax=DetAxes[1], scale="sqrt", plot_full_extent=False,
                    prange=prange, arange=arange,
                    cbar_lbl_size=12+fontsizes[fs], cbar_tick_size=11+fontsizes[fs])
@@ -677,25 +677,25 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
                                                # but keep the original vertical position and height
 
     # Plot the dark frames ----------------------------------------------------------------------------------
-    detector_image(dark_fits, darks[0, :, :], fig=QLfig, ax=DarkAxes[0], scale="sqrt",
+    detector_image(dark_fits, data=darks[0, :, :], fig=QLfig, ax=DarkAxes[0], scale="sqrt",
                    arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
     DarkAxes[0].set_title("First dark", fontsize=16+fontsizes[fs])
     DarkAxes[1].set_title("Second dark", fontsize=16+fontsizes[fs])
     DarkAxes[2].set_title("Average dark", fontsize=16+fontsizes[fs])
 
     if n_ints_dark >= 2:
-        detector_image(dark_fits, darks[1, :, :], fig=QLfig, ax=DarkAxes[1], scale="sqrt",
+        detector_image(dark_fits, data=darks[1, :, :], fig=QLfig, ax=DarkAxes[1], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
-        detector_image(dark_fits, avg_dark, fig=QLfig, ax=DarkAxes[2], scale="sqrt",
+        detector_image(dark_fits, data=avg_dark, fig=QLfig, ax=DarkAxes[2], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False, cmap=cmap)
 
     elif n_ints_dark==1:
         template = np.empty_like(darks[1, :, :])
         template[:] = np.nan
 
-        detector_image(dark_fits, template, fig=QLfig, ax=DarkAxes[1], scale="sqrt",
+        detector_image(dark_fits, data=template, fig=QLfig, ax=DarkAxes[1], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False)
-        detector_image(dark_fits, avg_dark, fig=QLfig, ax=DarkAxes[2], scale="sqrt",
+        detector_image(dark_fits, data=avg_dark, fig=QLfig, ax=DarkAxes[2], scale="sqrt",
                        arange=arange, show_colorbar=False, plot_full_extent=False)
         # Dark frame error messages 
         DarkAxes[1].text(0.1, 0.5, "No second dark frame", color="white", fontsize=16+fontsizes[fs], transform=DarkAxes[1].transAxes)
@@ -732,7 +732,7 @@ def make_one_quicklook(light_md, light_path, dark_md, dark_path, no_geo=None,
             ThumbAxes[i].text(0.1, 1.1, "Bad dark", color=color_dict['darkgrey'], va="top", fontsize=8+fontsizes[fs], transform=ThumbAxes[i].transAxes)
 
         this_frame = light_fits['primary'].data[i, :, :]
-        detector_image(light_fits, this_frame, fig=QLfig, ax=ThumbAxes[i], scale="sqrt",
+        detector_image(light_fits, data=this_frame, fig=QLfig, ax=ThumbAxes[i], scale="sqrt",
                        print_scale_type=False, show_colorbar=False, arange=arange, plot_full_extent=False,)
         # print the alt
         thisalt = np.nanmean(light_fits['PixelGeometry'].data['PIXEL_CORNER_MRH_ALT'][i, get_ech_slit_indices(light_fits)[0]:get_ech_slit_indices(light_fits)[1]+1, -1])
