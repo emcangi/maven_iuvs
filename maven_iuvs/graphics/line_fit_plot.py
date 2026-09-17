@@ -174,7 +174,7 @@ def plot_detector(data_to_plot, spapixrange, spepixrange,
                             cax_width_frac*ax_pos.width,
                             ax_pos.height))
         cb = fig.colorbar(pcm, cax=cax)
-        cb.set_label(label="DN/sec/px", size=cbar_lbl_size) 
+        cb.set_label(label=cbar_lbl_units, size=cbar_lbl_size) 
         cax.tick_params(which="both", labelsize=cbar_tick_size)
         if scale == "linear":
             cax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
