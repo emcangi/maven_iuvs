@@ -50,7 +50,7 @@ from maven_iuvs.instrument import ech_LSF_unit, convert_spectrum_DN_to_photoeven
 from maven_iuvs.miscellaneous import get_n_int, locate_missing_frames, \
     iuvs_orbno_from_fname, iuvs_filename_to_datetime, iuvs_segment_from_fname, \
     orbno_RE, fn_RE, fn_no_version_RE, looser_uniqueID_RE, orbit_folder, \
-    findDiff, relative_path_from_fname
+    findDiff, relative_path_from_fname, find_nearest
 from maven_iuvs.geometry import has_geometry_pvec, get_mean_mrh
 from maven_iuvs.pds import get_pds_dates
 from maven_iuvs.search import get_latest_files, find_files, dropxml
@@ -2075,6 +2075,26 @@ def get_ech_slit_indices(light_fits):
                            return_npix=False))
 
 
+def get_MRH_row_index(light_fits):
+    """
+    Gets the index in the spatial direction of the row most closely matching the
+    tangent altitude (i.e. minimum ray height (MRH)) spatial row.
+
+    Parameters
+    ----------
+    light_fits : astropy.io.fits instance
+                 File with light observation
+
+    Returns
+    ----------
+    i_MRH : int
+            index in spatial direction of MRH row
+    """
+    spapixlo_arr = light_fits["binning"].data['spapixlo'][0]
+    i_MRH = find_nearest(spapixlo_arr, ech_best_MRH_pixel,
+                         price_is_right=True)[0] 
+    return i_MRH
+
 # L1c processing ==============================================================
 
 def convert_l1a_to_l1c(light_fits, dark_fits, light_l1a_path, dark_l1a_path, l1c_savepath, 
@@ -3931,9 +3951,7 @@ def prep_output_and_writeout(light_l1a_path, dark_l1a_path, l1c_savepath, light_
 
     # Collect index of the best spatial row representing MRH of the observation
     center_idx = 4
-    spapixlo_arr = light_fits["binning"].data['spapixlo'][0]
-    i_MRH = iuvs.miscellaneous.find_nearest(spapixlo_arr, ech_best_MRH_pixel,
-                                            price_is_right=True)[0] 
+    i_MRH = get_MRH_row_index(light_fits)
 
     # Collect all the brightnesses and uncertainties into lists 
     H_brightnesses = [fit_params_list[i]['total_brightness_H'] for i in range(n_int)]
