@@ -1759,14 +1759,16 @@ def get_file_metadata(fname, geospatial=False):
     }
 
     if geospatial and has_geometry_pvec(this_fits):
-        metadata_dict['minmax_SZA'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE']), 
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'])]
-        metadata_dict['med_SZA'] = np.nanmedian(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'])
-        metadata_dict['minmax_lat'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT']), 
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'])]
-        metadata_dict['minmax_lon'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON']), 
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'])]
-        flat_LT = np.ndarray.flatten(this_fits["PixelGeometry"].data["PIXEL_LOCAL_TIME"])
+        si0, si1 = get_ech_slit_indices(this_fits)
+
+        metadata_dict['minmax_SZA'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1]),
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1])]
+        metadata_dict['med_SZA'] = np.nanmedian(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1])
+        metadata_dict['minmax_lat'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1+1, 4]), 
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1+1, 4])]
+        metadata_dict['minmax_lon'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1+1, 4]), 
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1+1, 4])]
+        flat_LT = np.ndarray.flatten(this_fits["PixelGeometry"].data["PIXEL_LOCAL_TIME"][:, si0:si1+1])
         metadata_dict['min_lt'] = np.nanmin(flat_LT)
         metadata_dict['max_lt'] = np.nanmax(flat_LT)
     elif geospatial and not has_geometry_pvec(this_fits):
