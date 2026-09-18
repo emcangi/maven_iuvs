@@ -14,7 +14,7 @@ from maven_iuvs.geometry import beta_flip
 from maven_iuvs.miscellaneous import uniqueID_RE, orbit_folder, iuvs_orbno_from_fname
 
 
-def build_cache(orbfold=None, cache={}, exclude_xml=True, exclude_dark=True, exclude_txt=True,
+def build_cache(orbfold=None, cache={}, filetype=".fits.gz", exclude_dark=True,
                 basefolder="/media/emc/ExtremePro/IUVS/IUVS_Data/l1c_ech_data/FMR_v15/DynestyAWS/"):
     """
     Given an orbit folder orbfold, will fill the cache with all the files there.
@@ -41,14 +41,16 @@ def build_cache(orbfold=None, cache={}, exclude_xml=True, exclude_dark=True, exc
     # Update cache
     for o in orbfolds:
         if o not in cache:
-            cache[o] = os.listdir(basefolder + o + "/")
-            if exclude_xml:
-                cache[o] = [cf for cf in cache[o] if ".xml" not in cf]
-            if exclude_txt:
-                cache[o] = [cf for cf in cache[o] if ".txt" not in cf]
-            if exclude_dark: 
-                cache[o] = [cf for cf in cache[o] if "dark" not in cf]
-    
+            tempcache = os.listdir(basefolder + o + "/")
+            
+            if filetype is not None:
+                if exclude_dark:
+                    cache[o] = [cf for cf in tempcache if ("dark" not in cf) and (cf.endswith(filetype))]
+                else:
+                    cache[o] = [cf for cf in tempcache if cf.endswidth(filetype)]
+            else:
+                cache[o] = tempcache
+
     return cache 
 
 
