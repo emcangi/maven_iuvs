@@ -6,7 +6,7 @@ from astropy.io import fits
 from maven_iuvs import anc_dir
 from maven_iuvs.instrument import calculate_calibration_curve
 from maven_iuvs.graphics import LineFitPlot
-from maven_iuvs.miscellaneous import get_n_int
+from maven_iuvs.miscellaneous import get_n_int, iuvs_data_product_level_from_fname
 from maven_iuvs.binning import get_binning_scheme, pix_to_bin
 
 def get_lsf_from_bins(spatial_binning):
