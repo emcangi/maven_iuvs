@@ -312,16 +312,18 @@ def main():
     make_plots = False # Whether to make plots of eveyr integration
     save_arrays = False # Whether to save fitting arrays to a file 
     overwrite = True # If True, existing files will be overwritten. If False, skipped.
-    binning = None  # "nonlinear" #  can specify nonlienar to redo those files. 
+    binning = {"nspa": 74, "nspe": 332}  # "nonlinear" #  can specify nonlienar to redo those files. 
                     # Had to do this at one point due to an IDL problem.
+    binning_not = True # will select files that DON'T match binning above.
+
     if binning=="nonlinear":
         print("WARNING! Only running nonlinear files! Is that what you wanted?")
     
     # Set nitty-gritty stuff for Python fittin ghere:
     py_process_kwargs = {"fitter": "dynesty",  #or scipy
-                    "livepts": 50, # Shoot for n*2, where n = number of degrees of freedom. 50 is conservative
-                    "bound": "multi", # this is a good default
-                    "calibration": args.lsf_cal} # v15 = new LSF, v14 = old LSF. from command line args
+                         "livepts": 50, # Shoot for n*2, where n = number of degrees of freedom. 50 is conservative
+                         "bound": "multi", # this is a good default
+                         "calibration": args.lsf_cal} # v15 = new LSF, v14 = old LSF. from command line args
     idl_process_kwargs = {}  # Will store any arguments for controlling IDL processing
 
     reportext = ""  # Extra text to append to processing report filename
@@ -371,6 +373,7 @@ def main():
         metadata_lists.append(downselect_data(lights_with_geom,
                                             light_dark="light",
                                             binning=binning,
+                                            binning_not=binning_not,
                                             orbit=[so, so+99]
                                             )
                             )
