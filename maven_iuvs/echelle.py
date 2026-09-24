@@ -283,7 +283,7 @@ def report_orbits_with_observations(ech_idx, start_orbit, end_orbit):
 
 def downselect_data(index, channel="ech", light_dark=None, orbit=None, 
                     date=None, segment=None, lat=None, ls=None, 
-                    int_time=None, binning=None):
+                    int_time=None, binning=None, ls_not=False, binning_not=False):
     """
     Given the index of files, this will select only those files which 
     match the orbit number, segment, or date. 
@@ -401,6 +401,23 @@ def downselect_data(index, channel="ech", light_dark=None, orbit=None,
             selected = [entry for entry in selected if 'bintbl' not in entry['binning']]
         elif binning=="nonlinear":
             selected = [entry for entry in selected if 'bintbl' in entry['binning']]
+        elif type(binning) is dict:
+            # Matches only on the criteria passed in within binning.
+            if binning_not is True:
+                selected = [entry for entry in selected if \
+                                            np.asarray([entry['binning'][lbl]!=binning[lbl] \
+                                                        for lbl in set(binning.keys()).intersection(set(entry['binning'].keys())) 
+                                                    ]
+                                                    ).all() 
+                                            ]
+            else:
+                selected = [entry for entry in selected if \
+                            np.asarray([entry['binning'][lbl]==binning[lbl] \
+                                        for lbl in set(binning.keys()).intersection(set(entry['binning'].keys())) 
+                                    ]
+                                    ).all() 
+                            ]
+            
         else:
             selected = [entry for entry in selected if entry['binning']==binning]
 
@@ -426,7 +443,10 @@ def downselect_data(index, channel="ech", light_dark=None, orbit=None,
             ls1 = math.ceil(lat)
             selected = [entry for entry in selected if (ls0 <= entry['Ls'] <= ls1)]
         elif type(ls) is list:
-            selected = [entry for entry in selected if (ls[0] <= entry['Ls'] <= ls[1])]
+            if ls_not==True:
+                selected = [entry for entry in selected if ((entry['Ls'] < ls[0]) or (ls[1] < entry['Ls']))]
+            else:
+                selected = [entry for entry in selected if (ls[0] <= entry['Ls'] <= ls[1])]
 
     return selected
 
