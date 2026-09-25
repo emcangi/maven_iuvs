@@ -1643,7 +1643,7 @@ def get_corrupt_frames(light_fits):
 
 # Metadata -------------------------------------------------------------
 
-def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None):
+def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None, update=True):
     """
     Collect the metadata for all files within the_dir. May contain
     subdirectories. Adds new files to the metadata file, and ensures that only 
@@ -1710,15 +1710,16 @@ def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None):
     remove_from_idx = np.setdiff1d(idx_fnames, most_recent_fnames)
     new_idx = [i for i in idx if i['name'] not in remove_from_idx]
 
-    # NEW: UPDATE WITH MISSING INFO - don't run on new index, just on existing entries
-    print(f"Now updating existing entries...")  
-    new_idx, added_keys, added_geom = update_metadata_file(the_dir, new_idx, geospatial=geospatial)
-    if (added_keys != 0) or (added_geom != 0):
-        print(f"Updated the metadata index:\n\t" +
-              f"missing keys added to {added_keys} files\n\t" +
-              f"geometry summary added to {added_geom} files\n\t")
-    else:
-        print("No entry updates needed")
+    # NEW: UPDATE WITH MISSING INFO - don't run on new index, just on existing entries  
+    if update:
+        print(f"Now updating existing entries...")
+        new_idx, added_keys, added_geom = update_metadata_file(the_dir, new_idx, geospatial=geospatial)
+        if (added_keys != 0) or (added_geom != 0):
+            print(f"Updated the metadata index:\n\t" +
+                f"missing keys added to {added_keys} files\n\t" +
+                f"geometry summary added to {added_geom} files\n\t")
+        else:
+            print("No entry updates needed")
 
     # add new files to index
     new_idx = np.concatenate([new_idx, add_to_idx])
@@ -1776,19 +1777,27 @@ def get_file_metadata(fname, geospatial=False):
                      'missing_frames': locate_missing_frames(this_fits, n_int),
                      'countrate_diagnostics': get_countrate_diagnostics(this_fits),
                      'Ls': this_fits['Observation'].data['SOLAR_LONGITUDE']
+                     'Ls': this_fits['Observation'].data['SOLAR_LONGITUDE'][0]
     }
 
-    if geospatial and has_geometry_pvec(this_fits):
-        si0, si1 = get_ech_slit_indices(this_fits)
+    if geospatial and has_geometry_pvec(this_fits) and ('comet' not in metadata_dict['name']):
+        if "ech" in fname:
+            si0, si1 = get_ech_slit_indices(this_fits)
+            si1 += 1  # because need to include the last row 
+        elif "l1b" in fname: # Use whole detector if not an echelle file 
+            si0 = 0
+            si1 = this_fits["detector_dark_subtracted"].data.shape[1]
+        else:
+            raise Exception("filename problem in generating metadata")
 
-        metadata_dict['minmax_SZA'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1]),
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1])]
-        metadata_dict['med_SZA'] = np.nanmedian(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1+1])
-        metadata_dict['minmax_lat'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1+1, 4]), 
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1+1, 4])]
-        metadata_dict['minmax_lon'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1+1, 4]), 
-                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1+1, 4])]
-        flat_LT = np.ndarray.flatten(this_fits["PixelGeometry"].data["PIXEL_LOCAL_TIME"][:, si0:si1+1])
+        metadata_dict['minmax_SZA'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1]),
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1])]
+        metadata_dict['med_SZA'] = np.nanmedian(this_fits['PixelGeometry'].data['PIXEL_SOLAR_ZENITH_ANGLE'][:, si0:si1])
+        metadata_dict['minmax_lat'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1, 4]), 
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LAT'][:, si0:si1, 4])]
+        metadata_dict['minmax_lon'] = [np.nanmin(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1, 4]), 
+                                        np.nanmax(this_fits['PixelGeometry'].data['PIXEL_CORNER_LON'][:, si0:si1, 4])]
+        flat_LT = np.ndarray.flatten(this_fits["PixelGeometry"].data["PIXEL_LOCAL_TIME"][:, si0:si1])
         metadata_dict['min_lt'] = np.nanmin(flat_LT)
         metadata_dict['max_lt'] = np.nanmax(flat_LT)
     elif geospatial and not has_geometry_pvec(this_fits):
