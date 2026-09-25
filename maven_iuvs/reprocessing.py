@@ -1,12 +1,17 @@
-from astropy.io import fits, ascii
+
+import sys
 import re
 import os
 import glob
+from contextlib import contextmanager
+from astropy.io import fits, ascii
 import numpy as np
-from maven_iuvs.miscellaneous import orbit_folder, fn_RE, orbno_RE, gen_error_RE
+from maven_iuvs.miscellaneous import orbno_RE, gen_error_RE
+
 
 # Function to validate the results of a reprocess, checking for header continuity -----
-def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True, verbose=False):
+def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], 
+                         levels=["l1c", "l1c"], skip_kernels=True, verbose=False):
     """
     Compare the common HDUs between two fits files to find differences. 
     The fits files should be for the same observation, differing only in 
@@ -35,9 +40,20 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
     ---------
     nothing - just prints out a report.
     """
+    
+
+    shape_match = True
+    data_match = True
 
     def compare_values(hdu, field1, field2):
+        """
+        Checks to see that all values within the given HDU's field are 
+        approximately the same (uses allclose because there may be weird 
+        float rounding issues that don't actually matter)
+        """
         # fits1 and fits2 are inherited from parent function.
+
+        # Check that floats are "close" (accounts for rounding weirdness)
         if fits1[hdu].data[field1].dtype in [">f8", "float64", "int64"]:
             mask = ~(np.isnan(fits1[hdu].data[field1]) | np.isnan(fits2[hdu].data[field2]))
             all_equal = np.allclose(fits1[hdu].data[field1][mask], 
@@ -53,11 +69,17 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
         print(f"\t{labels[1]}: {fits2[hdu].data[field]}")
         print()
     
-    def print_brightness_uncertainty_diffs(old_ver_lbl, v15_fits, older_fits):
+    def print_brightness_uncertainty_diffs():
         print("Brightness uncertainty processing changed:")
-        print(f"{old_ver_lbl}: BRIGHT_ONESIGMA_KR:\n{older_fits['BRIGHTNESSES'].data['BRIGHT_ONESIGMA_KR']}")
-        print(f"v15: BRIGHT_H_ONESIGMA_KR:\n{v15_fits['BRIGHTNESSES'].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
-              f"v15: BRIGHT_D_ONESIGMA_KR:\n{v15_fits['BRIGHTNESSES'].data['BRIGHT_D_ONESIGMA_KR']}")
+        if "BRIGHT_H_ONESIGMA_KR" in fits1["brightnesses"].data.names:
+            print(f"{labels[0]}: BRIGHT_H_ONESIGMA_KR:\n{fits1['BRIGHTNESSES'].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
+                  f"{labels[0]}: BRIGHT_D_ONESIGMA_KR:\n{fits1['BRIGHTNESSES'].data['BRIGHT_D_ONESIGMA_KR']}")
+            print(f"{labels[1]}: BRIGHT_ONESIGMA_KR:\n{fits2['BRIGHTNESSES'].data['BRIGHT_ONESIGMA_KR']}\n")
+        else:
+            print(f"{labels[0]}: BRIGHT_ONESIGMA_KR:\n{fits1['BRIGHTNESSES'].data['BRIGHT_ONESIGMA_KR']}\n")
+            print(f"{labels[1]}: BRIGHT_H_ONESIGMA_KR:\n{fits2['BRIGHTNESSES'].data['BRIGHT_H_ONESIGMA_KR']}\n" + \
+                    f"{labels[1]}: BRIGHT_D_ONESIGMA_KR:\n{fits2['BRIGHTNESSES'].data['BRIGHT_D_ONESIGMA_KR']}")
+            
 
     # Get common HDU names
     f1_hdus = [hdu.name.upper() for hdu in fits1]
@@ -80,60 +102,86 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
             print(f"{hduname} HDU")
             print("============================================")
             for n in fits1[hduname].data.names:
+
+
                 if (n=="KERNELS") & (skip_kernels):
                     print("Skipping kernels because they're definitely different due to pipeline changes upstream")
                     print()
                     continue
-                elif n not in fits2[hduname].data.names:
+
+
+                if n not in fits2[hduname].data.names:
                     print(f"Header {n} has no equivalent in {labels[1]} products.")
                     print()
-                # Uncertainties have changed:
-                elif (n=="BRIGHT_H_ONESIGMA_KR") \
-                     or (n=="BRIGHT_D_ONESIGMA_KR") \
-                     or (n=="BRIGHT_IPH_ONESIGMA_KR") \
-                     or (n=="BRIGHT_ONESIGMA_KR"):
                     
-                    # v14 or v13 was passed in first
-                    if n=="BRIGHT_ONESIGMA_KR":
+                # Uncertainties have changed:
+                if "ONESIGMA" in n:
 
-                        # If the other product is v15, uncertainties totally changed
-                        # so always print them out
-                        if "v15" in labels[1]:
-                            print_brightness_uncertainty_diffs(labels[0], fits2, fits1)
-                        else: # if comparing v14 to v14 or to v13, do a regular check
+                    # If the difference of the labels parsed as a float is >=1, 
+                    # Print the difference,
+                    if abs(float(labels[0][1:]) - float(labels[1][1:])) >= 1:
+                        print_brightness_uncertainty_diffs()
+                    else: # if comparing files of same version number, compare directly
+                        all_equal = compare_values(hduname, n, n)
+                        if all_equal:
+                            if verbose:
+                                print(f"{n} entry is equal")
+                        else:
+                            show_discrepancy(hduname, n)
+
+                    print()
+                elif n=="PRODUCT_CREATION_DATE":
+                    # These will always be different but that's okay.
+                    if verbose:
+                        print(f"{n}:")
+                        print(f"{labels[0]}: {fits1[hduname].data[n]}")
+                        print(f"{labels[1]}: {fits2[hduname].data[n]}")
+                        print()
+                elif n=="COLLECTION_ID":
+                    if fits1[hduname].data[n].upper() != fits2[hduname].data[n].upper():
+                        show_discrepancy(hduname, n)
+                elif n =="PRODUCT_ID":
+                    if (levels[0] == levels[1]) and (fits1[hduname].data[n][0][:-13] != fits2[hduname].data[n][0][:-13]):
+                        show_discrepancy(hduname, n)
+                elif n=="BUNDLE_ID":
+                    if levels[0] == levels[1]: 
+                        show_discrepancy(hduname, n)
+                else: # For any other HDU entry, just do a straight up comparison
+                    # First compare shapes
+                    shape_equal = (fits1[hduname].data[n].shape ==
+                                fits2[hduname].data[n].shape)
+
+                    if shape_equal:
+                        if verbose:
+                            print(f"{n} shape is consistent")
+                        # Compare arrays; different behavior for numbers vs. strings.
+                        # This just checks that values are "pretty dang close" to ignore 
+                        # differences due to how IDL and Python handle floats differently. 
+                        try:
                             all_equal = compare_values(hduname, n, n)
                             if all_equal:
                                 if verbose:
                                     print(f"{n} entry is equal")
                             else:
                                 show_discrepancy(hduname, n)
-
-                    else: # v15 is fits1, some older version is fits2
-                        print_brightness_uncertainty_diffs(labels[1], fits1, fits2)
-                    print()
-
-                else: # For any other HDU entry, just do a straight up comparison
-
-                    # Compare arrays; different behavior for numbers vs. strings.
-                    # This just checks that values are "pretty dang close" to ignore 
-                    # differences due to how IDL and Python handle floats differently. 
-                    all_equal = compare_values(hduname, n, n)
-
-                    if all_equal:
-                        if verbose:
-                            print(f"{n} entry is equal")
+                                data_match = False  
+                        except TypeError:
+                            if (n=="ORBIT_SEGMENT"): 
+                                if not (isinstance(fits1[hduname].data[n], str) and isinstance(fits2[hduname].data[n], str)):
+                                    # In some files the segment is inexplicably a number instead of a string.
+                                    print("ORBIT_SEGMENT:")
+                                    print(f"{labels[0]}: {fits1[hduname].data[n]}")
+                                    print(f"{labels[1]}: {fits2[hduname].data[n]}")
+                                    print()
                     else:
-                        # Some files have a screwed up segment
-                        if (n=="ORBIT_SEGMENT"): 
-                            if not (isinstance(fits1[hduname].data[n], str) and isinstance(fits2[hduname].data[n], str)):
-                                # In some files the segment is inexplicably a number instead of a string.
-                                print("the orbit segment is:")
-                                print(f"{labels[0]}: {fits1[hduname].data[n]}")
-                                print(f"{labels[1]}: {fits2[hduname].data[n]}")
-                                print()
-                        else: 
-                            show_discrepancy(hduname, n)
-            
+                        print(f"ERROR: {n} shapes are different:")
+                        print(f"{labels[0]}: {fits1[hduname].data[n].shape}")
+                        print(f"{labels[1]}: {fits2[hduname].data[n].shape}")
+                        print()
+                        shape_match = False
+                    
+                    
+    
             for n in fits2[hduname].data.names:
                 if n not in fits1[hduname].data.names \
                         and (n!="BRIGHT_H_ONESIGMA_KR") \
@@ -146,6 +194,8 @@ def compare_fits_headers(fits1, fits2, labels=["v13", "v14"], skip_kernels=True,
                     
 
     print("Finished")
+
+    return shape_match, data_match
 
 
 # Function to compare full results of the reprocess with PDS-archived files ---
