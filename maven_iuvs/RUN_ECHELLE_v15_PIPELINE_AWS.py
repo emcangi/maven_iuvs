@@ -315,6 +315,8 @@ def main():
     binning = {"nspa": 74, "nspe": 332}  # "nonlinear" #  can specify nonlienar to redo those files. 
                     # Had to do this at one point due to an IDL problem.
     binning_not = True # will select files that DON'T match binning above.
+    obs_date = [datetime.datetime(2017, 7, 17, 13, 0, 0), 
+                datetime.datetime(2017, 7, 17, 13, 40, 0)] # Downselect to obs in this date range only
 
     if binning=="nonlinear":
         print("WARNING! Only running nonlinear files! Is that what you wanted?")
@@ -374,7 +376,8 @@ def main():
                                             light_dark="light",
                                             binning=binning,
                                             binning_not=binning_not,
-                                            orbit=[so, so+99]
+                                            orbit=[so, so+99],
+                                            date=obs_date
                                             )
                             )
         # Create the folder so we can open IDL 
