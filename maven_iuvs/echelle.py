@@ -3230,9 +3230,7 @@ def get_kernel_array(n_wave_bins=332):
                    where i and j are indices along the flat array of data vs. 
                    wavelength
     """
-    if n_wave_bins != 332:
-        raise ValueError("Warning! We need to construct a kernel for other " \
-                         f"binning. This file has n_wave_bins={n_wave_bins}.")
+
     # Correlation kernel - made by Mike
     mirrored_kernel = np.array([0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
                                 0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
