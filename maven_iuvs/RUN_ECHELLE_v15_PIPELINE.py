@@ -101,7 +101,7 @@ def process_observation(obs_md, orbfold, ldkey, process_timestamp, clean_data_kw
                                     process_timestamp=process_timestamp,
                                     save_arrays=save_arrays,
                                     place_for_arrays=PLACE_FOR_ARRAYS,
-                                    calibration="new", 
+                                    calibration="v15", 
                                     make_plots=make_plots,
                                     clean_data_kwargs=clean_data_kwargs,                       
                                     plot_kwargs=plot_kwargs,
