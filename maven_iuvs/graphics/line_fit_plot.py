@@ -78,7 +78,8 @@ def plot_detector(data_to_plot, spapixrange, spepixrange,
                   fig=None, ax=None, plot_extent='full',
                   scale="linear", print_scale_type=False,
                   norm=None, cmap=None, cmap_fallback=109,
-                  show_colorbar=True, cbar_lbl_size=18, cbar_tick_size=16,
+                  show_colorbar=True, cbar_lbl_units="DN/sec/pix",
+                  cbar_lbl_size=12, cbar_tick_size=10,
                   arange=None, prange=None):
     """
     Creates an image of the full detector with data_to_plot overlaid. 
