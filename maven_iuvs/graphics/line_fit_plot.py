@@ -38,8 +38,17 @@ def detector_image(myfits,
     if (not (integration is None)) and (not (data is None)):
         raise RuntimeError("specify integration or data, not both")
     if integration is None:
+        if data is None:
+            raise RuntimeError("Please specify data (dimensions (spatial, spectral)) or integration")
+        
         integration = 0
+        # Handle a case where the whole data cube may be passed in, e.g. if 
+        # passing the primary data.
+        if len(data.shape)==3:
+            data = data[integration]
     if data is None:
+        if integration is None:
+            raise RuntimeError("Please specify data (dimensions (spatial, spectral)) or integration")
         try:
             data = myfits['detector_dark_subtracted'].data[integration]
         except KeyError:
