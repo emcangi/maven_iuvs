@@ -189,6 +189,7 @@ def get_default_data_directory(level='l1b'):
 
     return local_dir
 
+
 def call_rsync(remote_path,
                local_path,
                ssh_password,

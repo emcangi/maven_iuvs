@@ -142,7 +142,7 @@ def plot_detector(data_to_plot, spapixrange, spepixrange,
         ax.set_ylim([0, 1024])
     else:
         ax.set_xlim(plot_extent['sperange'])
-        ax.set_ylim(plot_extent['sparange'])        
+        ax.set_ylim(plot_extent['sparange'])
     
     # figure out what norm to use
     if norm is None:

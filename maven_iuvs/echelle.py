@@ -1697,7 +1697,7 @@ def get_dir_metadata(the_dir, geospatial=True, new_files_limit=None, update=True
             f_metadata = get_file_metadata(find_files(data_directory=the_dir,
                                                       use_index=False,
                                                       pattern=f)[0],
-                                           geospatial=geospatial)
+                                                      geospatial=geospatial)
             add_to_idx.append(f_metadata)
         
         print('\n... done')
