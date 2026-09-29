@@ -1772,7 +1772,6 @@ def get_file_metadata(fname, geospatial=False):
                      'geom': has_geometry_pvec(this_fits),
                      'missing_frames': locate_missing_frames(this_fits, n_int),
                      'countrate_diagnostics': get_countrate_diagnostics(this_fits),
-                     'Ls': this_fits['Observation'].data['SOLAR_LONGITUDE']
                      'Ls': this_fits['Observation'].data['SOLAR_LONGITUDE'][0]
     }
 
