@@ -48,7 +48,7 @@ def beta_flip(hdul):
     return beta_flipped
 
 
-def obs_in_orbit_plane(light_fits): 
+def obs_in_orbit_plane(light_fits, return_angles=False): 
     """
     Checks if a given integration by IUVS is within the plane of the orbit or not.
     When the frame is out of the orbit plane, it signifies that the APP is 
@@ -66,6 +66,9 @@ def obs_in_orbit_plane(light_fits):
     ----------
     OK_or_not : array (shape (N_int,))
                 Whether each frame is trustworthy or not in 1's and 0's
+    angle_degrees : array (shape (N_int,))
+                    Angle between boresight and orbit normal for each integration
+                    in degrees.
     """
     n_int = get_n_int(light_fits)
     
@@ -88,13 +91,17 @@ def obs_in_orbit_plane(light_fits):
     
     # Get the dot product of the two vectors a·b; 
     dotprod = (orbit_normal * boresight).sum(1)
-    # Get the norms of each ||a|| ||b||;
+    # Get the product of the norms of each ||a|| ||b||;
     norma_normb = np.linalg.norm(orbit_normal, axis=1) * np.linalg.norm(boresight, axis=1)
 
     # compute the angles and convert to degrees
     angle_degrees = (180 / np.pi) * np.arccos(dotprod / (norma_normb))
+
     OK_or_not = np.asarray([1 if 89.5<=d<=90.5 else 0 for d in angle_degrees])
-    return OK_or_not
+    if return_angles:
+        return angle_degrees
+    else:
+        return OK_or_not
 
 
 def haversine(subsolar_latitude, subsolar_longitude, lat_dim=1800, lon_dim=3600):
